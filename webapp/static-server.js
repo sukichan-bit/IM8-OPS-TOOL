@@ -11,7 +11,7 @@ const MIME = { ".html": "text/html", ".js": "text/javascript", ".xlsx": "applica
 
 http.createServer((req, res) => {
   let filePath = path.join(ROOT, decodeURIComponent(req.url.split("?")[0]));
-  if (req.url === "/") filePath = path.join(ROOT, "IM8-Open-SO-Checking-Tool-Operations.html");
+  if (req.url === "/") filePath = path.join(ROOT, "IM8-Ops-Tool.html");
   fs.readFile(filePath, (err, data) => {
     if (err) {
       res.writeHead(404);

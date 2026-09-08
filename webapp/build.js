@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = __dirname;
-const OUT_PATH = path.join(ROOT, "..", "IM8-Open-SO-Checking-Tool-Operations.html");
+const OUT_PATH = path.join(ROOT, "..", "IM8-Ops-Tool.html");
 
 function read(p) {
   return fs.readFileSync(p, "utf8");
