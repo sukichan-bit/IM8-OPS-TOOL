@@ -1,0 +1,13 @@
+# Python (legacy Streamlit prototype)
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Real order/customer data used for local testing — never shared
+samples/
+
+# Ad-hoc debug scratch scripts, not the real test suite (see webapp/tests/)
+webapp/tmp_test/
