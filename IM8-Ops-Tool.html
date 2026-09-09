@@ -3596,6 +3596,23 @@ function isVirtualBundleName(name) {
   return VIRTUAL_BUNDLE_RE.test(String(name || ""));
 }
 
+// A bundle name like "IM8-FG-000127 & IM8-FG-000198 (virtual bundle)"
+// already names its own components — parse them directly instead of always
+// requiring the user to re-type SKUs the name already tells us. Only fires
+// when EVERY "&"-joined token looks like a real item code (this codebase's
+// convention: an "IM8-" prefix); a friendly/marketing bundle name (e.g.
+// "Starter Kit & Travel Pack (virtual bundle)") still falls through to the
+// manual composition UI, since there's nothing safe to parse there.
+const BUNDLE_NAME_ITEM_RE = /^IM8-[A-Z0-9-]+$/i;
+
+function tryParseBundleNameComponents(name) {
+  const stripped = String(name || "").replace(VIRTUAL_BUNDLE_RE, "").trim();
+  if (!stripped) return null;
+  const tokens = stripped.split(/\s*&\s*/).map((t) => t.trim()).filter(Boolean);
+  if (tokens.length < 2 || !tokens.every((t) => BUNDLE_NAME_ITEM_RE.test(t))) return null;
+  return tokens.map((item) => ({ item, productName: "" }));
+}
+
 // composition: [{ item, productName }]. allocation: optional array of the
 // same length giving each component's share of net amount (must sum to 1);
 // defaults to an even split, per spec ("unless the user specifies otherwise").
@@ -3632,10 +3649,15 @@ function buildFgLines(itemRecords, warehouse, location, bundleCompositions) {
     const nameOrSku = rec.productName || rec.sku;
     if (isVirtualBundleName(rec.sku) || isVirtualBundleName(rec.productName)) {
       const key = bundleCompositions && rec.sku != null && bundleCompositions[rec.sku] ? rec.sku : nameOrSku;
-      const bundle = bundleCompositions && bundleCompositions[key];
+      let bundle = bundleCompositions && bundleCompositions[key];
       if (!bundle || !bundle.composition || !bundle.composition.length) {
-        unresolvedBundles.push({ row: rec.__row, name: nameOrSku });
-        continue;
+        const parsed = tryParseBundleNameComponents(nameOrSku);
+        if (parsed) {
+          bundle = { composition: parsed };
+        } else {
+          unresolvedBundles.push({ row: rec.__row, name: nameOrSku });
+          continue;
+        }
       }
       const split = splitVirtualBundle({ ...rec, warehouse, location }, bundle.composition, bundle.allocation);
       for (const s of split) {
@@ -3750,6 +3772,7 @@ if (typeof window !== "undefined") {
     autoDetectUsSummaryTable,
     buildSerLinesFromSignedAmounts,
     isVirtualBundleName,
+    tryParseBundleNameComponents,
     splitVirtualBundle,
     buildFgLines,
     buildFeeLines,
@@ -3772,6 +3795,7 @@ if (typeof module !== "undefined") {
     autoDetectUsSummaryTable,
     buildSerLinesFromSignedAmounts,
     isVirtualBundleName,
+    tryParseBundleNameComponents,
     splitVirtualBundle,
     buildFgLines,
     buildFeeLines,

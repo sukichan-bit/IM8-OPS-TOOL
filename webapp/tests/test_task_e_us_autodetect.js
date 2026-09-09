@@ -32,14 +32,12 @@ assert(Math.abs(auto.refundLine.amount - -305.56) < 0.01, `expected the Refund l
 assert(Math.abs(auto.referenceTotal - 16860.08) < 0.01, `expected the Net earnings reconciliation target to be 16860.08, got ${auto.referenceTotal}`);
 
 // ---- Full pipeline: FG lines (incl. the one real virtual bundle in this file) ----
+// No manual bundle composition is supplied here — this file's bundle name
+// ("IM8-FG-000127 & IM8-FG-000198 (virtual bundle)") is just its own two
+// real SKUs joined by "&", so it must auto-resolve on its own.
 const regionInfo = taskE.REGION_DEFAULTS.US;
-const bundleCompositions = {
-  "IM8-FG-000127 & IM8-FG-000198 (virtual bundle)": {
-    composition: [{ item: "IM8-FG-000127", productName: "" }, { item: "IM8-FG-000198", productName: "" }],
-  },
-};
-const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(auto.itemRecords, regionInfo.warehouse, regionInfo.location, bundleCompositions);
-assert(unresolvedBundles.length === 0, "the one bundle in this file should resolve with its real composition supplied");
+const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(auto.itemRecords, regionInfo.warehouse, regionInfo.location, {});
+assert(unresolvedBundles.length === 0, "this file's bundle name is real SKUs joined by & and must auto-resolve with no composition supplied");
 assert(fgLines.length === 20, `expected 20 FG lines after bundle-splitting (17 raw rows, 3 of which are the bundle and split into 2 each), got ${fgLines.length}`);
 
 const feeRecordsAll = auto.feeRecords.concat(auto.refundLine ? [auto.refundLine] : []);

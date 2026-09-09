@@ -55,6 +55,31 @@ assert(comp1["Net amount"] + comp2["Net amount"] === bundleNet, "component net a
 const { unresolvedBundles: unresolved2 } = taskE.buildFgLines(records, "USOPS-WH07", "Primary", {});
 assert(unresolved2.length === 1 && unresolved2[0].name === "Bundle B", "missing bundle composition should be flagged for the user");
 
+// ---- Bundle names that ARE real item codes joined by "&" auto-parse — no manual composition needed ----
+assert(
+  JSON.stringify(taskE.tryParseBundleNameComponents("IM8-FG-000127 & IM8-FG-000198 (virtual bundle)")) ===
+    JSON.stringify([{ item: "IM8-FG-000127", productName: "" }, { item: "IM8-FG-000198", productName: "" }]),
+  "a bundle name that's just real SKUs joined by & should parse into those components directly"
+);
+assert(
+  taskE.tryParseBundleNameComponents("IM8-FG-000127 & IM8-FG-000198 & IM8-FG-000200 (virtual bundle)").length === 3,
+  "should handle more than 2 components"
+);
+assert(
+  taskE.tryParseBundleNameComponents("Starter Kit & Travel Pack (virtual bundle)") === null,
+  "a friendly/marketing name (not real SKU codes) must NOT be guessed at — still needs manual entry"
+);
+assert(taskE.tryParseBundleNameComponents("Bundle B") === null, "a name with no components at all should not parse");
+
+const skuBundleRecords = [
+  { __row: 1, sku: "IM8-FG-000127 & IM8-FG-000198 (virtual bundle)", productName: null, unitPrice: 35, discount: 0, qty: 10 },
+];
+const { lines: skuBundleLines, unresolvedBundles: skuBundleUnresolved } = taskE.buildFgLines(skuBundleRecords, "USOPS-WH07", "Primary", {});
+assert(skuBundleUnresolved.length === 0, "a SKU-named bundle must auto-resolve even with NO composition supplied at all");
+assert(skuBundleLines.length === 2, `expected 2 lines (one per component), got ${skuBundleLines.length}`);
+assert(skuBundleLines.every((l) => l.Quantity === 10), "each component must carry the FULL quantity, not a split share");
+assert(skuBundleLines.find((l) => l["Item number"] === "IM8-FG-000127") && skuBundleLines.find((l) => l["Item number"] === "IM8-FG-000198"), "both real component SKUs must appear as their own lines");
+
 // ---- buildFeeLines: sign convention, $0 skip, refund as its own line ----
 const feeRecords = [
   { feeType: "FBT fulfillment fee", itemCode: "IM8-SER-000023", amount: 45.5 },
