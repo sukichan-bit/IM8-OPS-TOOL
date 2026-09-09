@@ -2113,12 +2113,57 @@ function renderRawGridPreview(container, rawRows, maxRows, maxCols) {
 // already-loaded workbook. Only wired up for US so far (verified against a
 // real file) — other regions always fall through to the manual sheet/
 // range/column configuration form below, unchanged.
+// Sets the region dropdown/segmented control without re-triggering their
+// own change handlers (which would re-run detection and could recurse).
+function setTaskERegionUi(region) {
+  const select = document.getElementById("e-region");
+  if (select) select.value = region;
+  document.querySelectorAll("#e-region-seg button").forEach((b) => {
+    b.classList.toggle("ops2-seg-active", b.dataset.region === region);
+  });
+}
+
+// Called right after a fresh file upload: tries every sheet in the
+// workbook (starting with whichever the currently-selected region's own
+// hint already guessed) against the US auto-detect landmarks, regardless
+// of which region happens to be selected — a file's own layout is
+// unambiguous, so the user shouldn't have to remember to pick "US" first
+// for a file that's clearly this shape. On a match, syncs the region
+// control to reflect it (a real region, not left showing a stale default).
 function tryAutoDetectTaskE() {
+  taskEState.auto = null;
+  if (!taskEState.wb) return;
+  const candidates = [taskEState.itemSheet, ...taskEState.sheets].filter((s, i, arr) => s && arr.indexOf(s) === i);
+  for (const sheetName of candidates) {
+    let result = null;
+    try {
+      result = taskE.autoDetectUsSummaryTable(taskERawRows(sheetName));
+    } catch (e) {
+      result = null;
+    }
+    if (result) {
+      taskEState.auto = result;
+      taskEState.itemSheet = sheetName;
+      taskEState.feeSheet = sheetName;
+      if (taskEState.region !== "US") {
+        taskEState.region = "US";
+        setTaskERegionUi("US");
+      }
+      return;
+    }
+  }
+}
+
+// Called when the user explicitly changes the region dropdown afterwards:
+// only re-attempts detection when that explicit choice is US, and never
+// flips the region back on its own — an explicit non-US choice (even
+// against a file that happens to also match the US shape) is respected,
+// not silently overridden.
+function tryAutoDetectTaskEForCurrentRegion() {
   taskEState.auto = null;
   if (!taskEState.wb || taskEState.region !== "US" || !taskEState.itemSheet) return;
   try {
-    const rawRows = taskERawRows(taskEState.itemSheet);
-    taskEState.auto = taskE.autoDetectUsSummaryTable(rawRows);
+    taskEState.auto = taskE.autoDetectUsSummaryTable(taskERawRows(taskEState.itemSheet));
   } catch (e) {
     taskEState.auto = null;
   }
@@ -2730,7 +2775,7 @@ function init() {
       const guess = taskEState.sheets.find((s) => taskC.normText(s).includes(taskC.normText(hint.sheetHint)));
       taskEState.itemSheet = guess || taskEState.sheets[0] || null;
       taskEState.feeSheet = taskEState.itemSheet;
-      tryAutoDetectTaskE();
+      tryAutoDetectTaskEForCurrentRegion();
     }
     renderTaskEConfig();
   });
