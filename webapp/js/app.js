@@ -2385,6 +2385,162 @@ function renderTaskE() {
   renderTaskEConfig();
 }
 
+// ---------------- Task F ----------------
+
+// FG/SER item-name overrides persisted in this browser (see task_f.js's
+// AMAZON_ITEM_MASTER_SEED/AMAZON_SER_NAME_SEED for the built-in defaults) —
+// separate from Task A's item master since Amazon needs the D365 unit of
+// measure too, not just the product name.
+const AMAZON_ITEM_MASTER_STORAGE_KEY = "im8OpsToolAmazonItemMasterV1";
+
+function loadAmazonItemMasterFromStorage() {
+  try {
+    const raw = localStorage.getItem(AMAZON_ITEM_MASTER_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : { ...taskF.AMAZON_ITEM_MASTER_SEED };
+  } catch (e) {
+    return { ...taskF.AMAZON_ITEM_MASTER_SEED };
+  }
+}
+function saveAmazonItemMasterToStorage(map) {
+  try {
+    localStorage.setItem(AMAZON_ITEM_MASTER_STORAGE_KEY, JSON.stringify(map));
+  } catch (e) {
+    // Storage disabled/full — still works for this page load.
+  }
+}
+
+const taskFState = {
+  wb: null,
+  fileName: "",
+  itemMaster: loadAmazonItemMasterFromStorage(),
+  serNames: { ...taskF.AMAZON_SER_NAME_SEED },
+};
+
+async function handleTaskFAmazonFile(file) {
+  const infoBox = document.getElementById("task-f-file-info");
+  infoBox.innerHTML = "";
+  document.getElementById("task-f-results").innerHTML = "";
+  if (!file) {
+    taskFState.wb = null;
+    taskFState.fileName = "";
+    return;
+  }
+  const source = await loadWorkbookOrCsv(file);
+  if (!source.wb) {
+    infoBox.appendChild(h("p", { class: "error", text: "This isn't a multi-tab Excel workbook — upload the original .xlsx transactions export." }));
+    return;
+  }
+  const sheets = io.listSheets(source.wb) || [];
+  const summarySheet = sheets.find((s) => taskC.normText(s).includes("summary")) || sheets[0];
+  const skuRefundSheet = sheets.find((s) => taskC.normText(s).includes("sku") && taskC.normText(s).includes("refund"));
+  if (!summarySheet || !skuRefundSheet) {
+    infoBox.appendChild(h("p", { class: "error", text: `Couldn't find both a "Summary" and a "SKU + Refund" tab in this file. Sheets found: ${sheets.join(", ")}` }));
+    return;
+  }
+  taskFState.wb = source.wb;
+  taskFState.fileName = file.name;
+  taskFState.summarySheet = summarySheet;
+  taskFState.skuRefundSheet = skuRefundSheet;
+  infoBox.appendChild(h("p", { class: "caption", text: `Loaded '${file.name}'. Summary tab: '${summarySheet}'. SKU + Refund tab: '${skuRefundSheet}'.` }));
+  computeTaskF();
+}
+
+function renderAmazonItemMasterEditor(container, unmapped) {
+  container.innerHTML = "";
+  container.appendChild(h("h4", { text: "FG item master (Item number → Product name / Unit)" }));
+  container.appendChild(h("p", { class: "caption", text: "Saved in this browser and reused every month. Only new/unrecognized SKUs need filling in below." }));
+  if (unmapped.length) {
+    container.appendChild(h("p", { class: "warning", text: `Unmapped item number(s) — fill these in and rebuild: ${unmapped.join(", ")}` }));
+  }
+  const grid = h("div", { class: "col-grid" });
+  for (const sku of unmapped) {
+    const wrap = h("div", { class: "file-row" });
+    wrap.appendChild(h("label", { text: sku + ": " }));
+    const nameInput = h("input", { type: "text", placeholder: "Product name" });
+    const unitInput = h("input", { type: "text", placeholder: "Unit (e.g. Box, Set, Pouch)" });
+    const save = () => {
+      if (!nameInput.value.trim() || !unitInput.value.trim()) return;
+      taskFState.itemMaster[sku] = { name: nameInput.value.trim(), unit: unitInput.value.trim() };
+      saveAmazonItemMasterToStorage(taskFState.itemMaster);
+    };
+    nameInput.addEventListener("change", save);
+    unitInput.addEventListener("change", save);
+    wrap.appendChild(nameInput);
+    wrap.appendChild(unitInput);
+    grid.appendChild(wrap);
+  }
+  container.appendChild(grid);
+  if (unmapped.length) {
+    const rebuildBtn = h("button", { text: "Rebuild with these mappings" });
+    rebuildBtn.addEventListener("click", () => computeTaskF());
+    container.appendChild(rebuildBtn);
+  }
+}
+
+function computeTaskF() {
+  const resultsBox = document.getElementById("task-f-results");
+  const masterBox = document.getElementById("task-f-item-master");
+  resultsBox.innerHTML = "";
+  if (!taskFState.wb) { ops2SyncRun("tab-f", false, 1); return; }
+
+  let summaryResult, orderRecords;
+  try {
+    const summaryRaw = io.sheetToRawRows(taskFState.wb, taskFState.summarySheet, null);
+    summaryResult = taskF.extractAmazonSummary(summaryRaw, taskFState.serNames);
+    const skuRefundRaw = io.sheetToRawRows(taskFState.wb, taskFState.skuRefundSheet, null);
+    orderRecords = taskF.extractAmazonOrderLines(skuRefundRaw);
+  } catch (e) {
+    ops2SyncRun("tab-f", false, 0);
+    resultsBox.appendChild(h("p", { class: "error", text: e.message }));
+    return;
+  }
+  ops2SyncRun("tab-f", true, 0);
+
+  const { lines: fgLines, unmapped } = taskF.buildAmazonFgLines(orderRecords, taskFState.itemMaster);
+  renderAmazonItemMasterEditor(masterBox, unmapped);
+
+  const serLines = taskF.buildAmazonSerLines(summaryResult.serLines);
+  const table = taskF.buildAmazonSoLineTable(fgLines, serLines);
+  const rec = taskF.amazonReconcile(table, summaryResult.netSales);
+
+  const summaryLine = h("p", {
+    class: rec.reconciled ? "info" : "error",
+    text: `${fgLines.length} order line(s) + ${serLines.length} SER line(s) = ${table.length} row(s). ` +
+      `Sum of Net amount: ${rec.sum.toFixed(2)} vs Net sales: ${rec.netSales.toFixed(2)} ` +
+      (rec.reconciled ? "— reconciled to the cent." : `— OFF BY ${rec.diff.toFixed(2)}. Check refund double-count, the column-M sign, and whether Duty & Tax nets to ~0 before downloading.`),
+  });
+  resultsBox.appendChild(summaryLine);
+
+  if (unmapped.length) {
+    resultsBox.appendChild(h("p", { class: "warning", text: "Fill in the item master above and rebuild before downloading — unmapped rows have blank Product name / Unit." }));
+  }
+
+  const btn = h("button", { class: "run-btn", text: "Download D365 SO Lines (.xlsx)" });
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Building file...";
+    try {
+      const buf = await io.toExcelBytes({ "Sheet1": table });
+      const stamp = taskFState.fileName.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "_") || todayStamp();
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `Amazon_SO_Lines_Completed_${stamp}.xlsx`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+  resultsBox.appendChild(btn);
+
+  const tblContainer = h("div", {});
+  resultsBox.appendChild(tblContainer);
+  renderTable(table, tblContainer, 200);
+}
+
+function renderTaskF() {
+  const masterBox = document.getElementById("task-f-item-master");
+  if (masterBox && !taskFState.wb) renderAmazonItemMasterEditor(masterBox, []);
+}
+
 function initTabs() {
   document.querySelectorAll(".tab-button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2491,11 +2647,17 @@ function init() {
   ops2InitFileCounts("tab-e", ["e-tiktok-file"], []);
   ops2InitEmptyState("tab-e");
 
+  onFileChange("f-amazon-file", "Loading Amazon transactions file...", (e) => handleTaskFAmazonFile(e.target.files[0]));
+  document.getElementById("f-amazon-clear").addEventListener("click", () => { document.getElementById("f-amazon-file").value = ""; handleTaskFAmazonFile(null); });
+  ops2InitFileCounts("tab-f", ["f-amazon-file"], []);
+  ops2InitEmptyState("tab-f");
+
   renderTaskA();
   renderTaskB();
   renderTaskC();
   renderTaskD();
   renderTaskE();
+  renderTaskF();
 }
 
 document.addEventListener("DOMContentLoaded", init);

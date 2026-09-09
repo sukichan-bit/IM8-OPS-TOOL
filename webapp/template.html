@@ -643,6 +643,10 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
       <span class="tab-badge">E</span>
       <span class="tab-text">TikTok SO Lines</span>
     </button>
+    <button class="tab-button" data-tab="tab-f" title="Amazon Sales Order Lines (Task F)">
+      <span class="tab-badge">F</span>
+      <span class="tab-text">Amazon SO Lines</span>
+    </button>
   </div>
 </nav>
 
@@ -1058,6 +1062,50 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
     </section>
   </div>
 </div>
+
+<div id="tab-f" class="tab-panel">
+  <div class="ops2-grid">
+    <section class="ops2-left">
+      <div class="ops2-heading">
+        <div class="ops2-eyebrow">Task F</div>
+        <h2>Amazon Sales Order Lines</h2>
+        <p class="task-lede">Converts one month of Amazon transactions into D365 sales order lines.</p>
+        <details class="task-detail ops2-how"><summary>How this works</summary>
+          <p>Converts an Amazon Transactions Details export into D365 SO lines for one month, following the same tie-out process each time: order lines from the "SKU + Refund" tab's Order block (SKU remap applied, item master used for Product name/Unit), plus one SER line per mapped Summary column (Duty &amp; Tax skipped, the "Sum of other" column computed as Grand Total minus Transfer, refund counted once). The total must match the Summary tab's Net sales figure to the cent before downloading.</p>
+        </details>
+      </div>
+      <hr class="ops2-hr">
+      <div class="ops2-required">
+        <div class="ops2-required-head"><h6>Required files</h6><span class="ops2-count" data-required-count></span></div>
+        <div class="ops2-slot-row">
+          <div class="ops2-slot-main">
+            <div class="ops2-slot-label">Amazon transactions details</div>
+            <div class="ops2-slot-desc">The monthly export, with "Summary" and "SKU + Refund" tabs</div>
+            <div id="task-f-file-info"></div>
+          </div>
+          <div class="ops2-slot-action">
+            <label class="ops2-filebtn" for="f-amazon-file">Choose file</label>
+            <input type="file" id="f-amazon-file" accept=".xlsx,.xls" class="ops2-file-hidden">
+            <button type="button" class="ops2-slot-clear" id="f-amazon-clear">Clear file</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="task-f-item-master"></div>
+    </section>
+    <section class="ops2-right">
+      <div class="ops2-empty">
+        <h6>Output</h6>
+        <div class="ops2-empty-title">Add the required file, then run.</div>
+        <div class="ops2-preview">
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">D365 sales order lines (.xlsx), reconciled to the cent against Net sales</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Amazon SKUs with no item master mapping, flagged</span></div>
+        </div>
+      </div>
+      <div id="task-f-results"></div>
+    </section>
+  </div>
+</div>
 </div>
 </main>
 
@@ -1114,6 +1162,10 @@ if (window.pdfjsLib) {
 <script>
 /* ==================== task_e.js ==================== */
 <!--TASK_E-->
+</script>
+<script>
+/* ==================== task_f.js ==================== */
+<!--TASK_F-->
 </script>
 <script>
 /* ==================== pdf_extract.js ==================== */

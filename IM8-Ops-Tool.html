@@ -643,6 +643,10 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
       <span class="tab-badge">E</span>
       <span class="tab-text">TikTok SO Lines</span>
     </button>
+    <button class="tab-button" data-tab="tab-f" title="Amazon Sales Order Lines (Task F)">
+      <span class="tab-badge">F</span>
+      <span class="tab-text">Amazon SO Lines</span>
+    </button>
   </div>
 </nav>
 
@@ -1055,6 +1059,50 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
         </div>
       </div>
       <div id="task-e-results"></div>
+    </section>
+  </div>
+</div>
+
+<div id="tab-f" class="tab-panel">
+  <div class="ops2-grid">
+    <section class="ops2-left">
+      <div class="ops2-heading">
+        <div class="ops2-eyebrow">Task F</div>
+        <h2>Amazon Sales Order Lines</h2>
+        <p class="task-lede">Converts one month of Amazon transactions into D365 sales order lines.</p>
+        <details class="task-detail ops2-how"><summary>How this works</summary>
+          <p>Converts an Amazon Transactions Details export into D365 SO lines for one month, following the same tie-out process each time: order lines from the "SKU + Refund" tab's Order block (SKU remap applied, item master used for Product name/Unit), plus one SER line per mapped Summary column (Duty &amp; Tax skipped, the "Sum of other" column computed as Grand Total minus Transfer, refund counted once). The total must match the Summary tab's Net sales figure to the cent before downloading.</p>
+        </details>
+      </div>
+      <hr class="ops2-hr">
+      <div class="ops2-required">
+        <div class="ops2-required-head"><h6>Required files</h6><span class="ops2-count" data-required-count></span></div>
+        <div class="ops2-slot-row">
+          <div class="ops2-slot-main">
+            <div class="ops2-slot-label">Amazon transactions details</div>
+            <div class="ops2-slot-desc">The monthly export, with "Summary" and "SKU + Refund" tabs</div>
+            <div id="task-f-file-info"></div>
+          </div>
+          <div class="ops2-slot-action">
+            <label class="ops2-filebtn" for="f-amazon-file">Choose file</label>
+            <input type="file" id="f-amazon-file" accept=".xlsx,.xls" class="ops2-file-hidden">
+            <button type="button" class="ops2-slot-clear" id="f-amazon-clear">Clear file</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="task-f-item-master"></div>
+    </section>
+    <section class="ops2-right">
+      <div class="ops2-empty">
+        <h6>Output</h6>
+        <div class="ops2-empty-title">Add the required file, then run.</div>
+        <div class="ops2-preview">
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">D365 sales order lines (.xlsx), reconciled to the cent against Net sales</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Amazon SKUs with no item master mapping, flagged</span></div>
+        </div>
+      </div>
+      <div id="task-f-results"></div>
     </section>
   </div>
 </div>
@@ -3555,6 +3603,356 @@ if (typeof module !== "undefined") {
     buildFeeLines,
     buildSoLineTable,
     reconcile,
+  };
+}
+
+</script>
+<script>
+/* ==================== task_f.js ==================== */
+// Task F — Amazon Transactions -> D365 Sales Order Lines.
+// Process reference: Amazon_Template_Process.md (upgraded to target the
+// D365 SO Line import layout — see Amazon_SO_Line_Template.xlsx). Unlike
+// TikTok (Task E), Amazon's Summary/SKU+Refund layout is documented as
+// stable month to month, so this locates the key rows/columns by label
+// text (not fixed row numbers) but does not need a per-run configuration
+// panel the way Task E does.
+
+function toNumSafe(v) {
+  if (typeof v === "number") return isFinite(v) ? v : 0;
+  if (v == null) return 0;
+  const n = parseFloat(String(v).replace(/[,$]/g, ""));
+  return isNaN(n) ? 0 : n;
+}
+
+const AMAZON_DUTY_TAX_SKU = "IM8-SER-000004";
+const AMAZON_REFUND_SKU = "IM8-SER-000005";
+
+const AMAZON_SO_TEMPLATE_COLUMNS = [
+  "Variant number", "Bundle sales item", "Bundle Retail VariantId", "Item number", "Product name",
+  "Sales category", "Quantity", "Unit", "Style", "Delivery type", "Adjusted unit price", "Site",
+  "Warehouse", "Batch number", "Location", "Unit price", "Discount", "Discount percent", "Net amount",
+  "Currency", "Line status", "Adjusted net amount", "Quality order status", "Deliver now", "Line type",
+  "Source code", "Load", "Packing quantity", "Created date and time", "Same batch selection",
+  "Fulfillment status", "DOM Status", "Promotion Code", "Refund transaction ID", "Disposition code",
+  "Return reason code", "Total discount amount", "Discount type", "Modified by",
+];
+
+// FG item master (Item number -> {name, unit}), keyed separately from Task
+// A's item master since Amazon needs the D365 unit of measure too, not just
+// the product name. Seeded with the items seen so far so a new month with
+// the same SKUs needs no manual entry; a genuinely new FG SKU shows up as a
+// flagged row rather than a guess.
+const AMAZON_ITEM_MASTER_SEED = {
+  "IM8-FG-000120": { name: "Daily Essentials 30 Servings,Gusset bag with scoop, NSF,v1.5", unit: "Pouch" },
+  "IM8-FG-000053": { name: "Daily Essentials - Travel Sachet (30 Pack), Non-NSF", unit: "Box" },
+  "IM8-FG-000076": { name: "Essential Starter Kit - One Time Purchase", unit: "Set" },
+  "IM8-FG-000080": { name: "Essential Starter Kit (Travel 30) - One Time Purchase", unit: "Set" },
+  "IM8-FG-000196": { name: "Essentials - Travel Box Set (30ct), Variety - STD", unit: "Box" },
+  "IM8-FG-000187": { name: "Essentials - Travel Box Set (30ct), Orange Lemon - STD", unit: "Box" },
+  "IM8-FG-000200": { name: "Essentials - Travel Box Set (30ct), Acai - STD", unit: "Box" },
+  "IM8-FG-000188": { name: "Essentials - Travel Box Set (30ct), Mango Passionfruit - STD", unit: "Box" },
+  "IM8-FG-000233": { name: "Refill - Quarterly Subscription - Essentials V2 - Variety", unit: "Set" },
+  "IM8-FG-000230": { name: "Refill - Quarterly Subscription - Essentials V2 - Lemon", unit: "Set" },
+};
+// SER item master (Item number -> D365's own product name spelling), kept
+// separate because D365 sometimes spells these differently to the Summary
+// tab's own column headers (e.g. "Fulfilment fees", one L).
+const AMAZON_SER_NAME_SEED = {
+  "IM8-SER-000003": "Shipping Charges",
+  "IM8-SER-000015": "Advertising Expenses",
+  "IM8-SER-000013": "Commission expense",
+  "IM8-SER-000023": "Fulfilment fees",
+  "IM8-SER-000002": "Payment Gateway Fees",
+  "IM8-SER-000005": "Refund",
+};
+
+// ---------- Summary tab extraction (label-anchored, not fixed row numbers) ----------
+
+function amazonFindRowByLabel(rawRows, label) {
+  const re = new RegExp("^" + label.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*$", "i");
+  for (let r = 0; r < rawRows.length; r++) {
+    const cell = rawRows[r] && rawRows[r][0];
+    if (cell != null && re.test(String(cell))) return r;
+  }
+  return -1;
+}
+
+function amazonFindSerSkuRow(rawRows, startRow) {
+  const end = Math.min(startRow + 15, rawRows.length);
+  for (let r = startRow; r < end; r++) {
+    const row = rawRows[r] || [];
+    const hits = row.filter((v) => v != null && /^IM8-SER-\d+$/i.test(String(v).trim()));
+    if (hits.length >= 2) return r;
+  }
+  return -1;
+}
+
+function amazonFindNetSales(rawRows) {
+  for (let r = 0; r < rawRows.length; r++) {
+    const row = rawRows[r] || [];
+    for (let c = 0; c < row.length; c++) {
+      if (row[c] != null && /net sales/i.test(String(row[c]).trim())) {
+        for (let c2 = c + 1; c2 < row.length; c2++) {
+          if (typeof row[c2] === "number") return { row: r, col: c, value: row[c2] };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Returns { serLines: [{sku,name,qty,unitPrice,netAmount}], netSales, diagnostics }.
+// serNames overrides the D365-spelling lookup (defaults to AMAZON_SER_NAME_SEED).
+function extractAmazonSummary(rawRows, serNames) {
+  const names = serNames || AMAZON_SER_NAME_SEED;
+  const orderRow = amazonFindRowByLabel(rawRows, "Order");
+  const refundRow = amazonFindRowByLabel(rawRows, "Refund");
+  const transferRow = amazonFindRowByLabel(rawRows, "Transfer");
+  const grandTotalRow = amazonFindRowByLabel(rawRows, "Grand Total");
+  const missing = [];
+  if (orderRow < 0) missing.push("Order");
+  if (refundRow < 0) missing.push("Refund");
+  if (transferRow < 0) missing.push("Transfer");
+  if (grandTotalRow < 0) missing.push("Grand Total");
+  if (missing.length) {
+    throw new Error(`Could not find row(s) labelled ${missing.join(", ")} in column A of the Summary tab — layout may have changed.`);
+  }
+  const serSkuRow = amazonFindSerSkuRow(rawRows, grandTotalRow);
+  if (serSkuRow < 0) throw new Error("Could not find the SER item-number row (e.g. IM8-SER-000003) below Grand Total in the Summary tab.");
+  const serNameRow = serSkuRow + 1;
+  const netSalesInfo = amazonFindNetSales(rawRows);
+  if (!netSalesInfo) throw new Error('Could not find a "Net sales" figure in the Summary tab.');
+
+  const grand = rawRows[grandTotalRow] || [];
+  const transfer = rawRows[transferRow] || [];
+  const refund = rawRows[refundRow] || [];
+  const skuRow = rawRows[serSkuRow] || [];
+  const nameRow = rawRows[serNameRow] || [];
+
+  const serLines = [];
+  // Columns C..L (0-based idx 2..11): direct Grand Total value per column.
+  for (let c = 2; c <= 11; c++) {
+    const skuRaw = skuRow[c];
+    if (skuRaw == null || String(skuRaw).trim() === "") continue;
+    const sku = String(skuRaw).trim();
+    if (sku === AMAZON_DUTY_TAX_SKU) continue;
+    const value = toNumSafe(grand[c]);
+    if (Math.abs(value) < 0.005) continue;
+    serLines.push({
+      sku,
+      name: names[sku] || (nameRow[c] == null ? sku : String(nameRow[c]).trim()),
+      qty: value < 0 ? -1 : 1,
+      unitPrice: Math.abs(value),
+      netAmount: value,
+    });
+  }
+  // Column M (0-based idx 12, "Sum of other") — special case: Grand Total
+  // minus Transfer isolates the non-payout portion. Reversing the sign
+  // leaves a gap of exactly 2x the value at reconciliation time.
+  const mSkuRaw = skuRow[12];
+  if (mSkuRaw != null && String(mSkuRaw).trim() !== "") {
+    const mSku = String(mSkuRaw).trim();
+    if (mSku !== AMAZON_DUTY_TAX_SKU) {
+      const mValue = toNumSafe(grand[12]) - toNumSafe(transfer[12]);
+      if (Math.abs(mValue) >= 0.005) {
+        serLines.push({
+          sku: mSku,
+          name: names[mSku] || (nameRow[12] == null ? mSku : String(nameRow[12]).trim()),
+          qty: mValue < 0 ? -1 : 1,
+          unitPrice: Math.abs(mValue),
+          netAmount: mValue,
+        });
+      }
+    }
+  }
+  // Refund SER line — one line only (refund detail rows are never added
+  // separately; the Order block's "Sum of product sales" Grand Total
+  // already includes refunded amounts, so adding both double-counts).
+  const refundValue = toNumSafe(refund[1]);
+  serLines.push({
+    sku: AMAZON_REFUND_SKU,
+    name: names[AMAZON_REFUND_SKU] || "Refund",
+    qty: refundValue < 0 ? -1 : 1,
+    unitPrice: Math.abs(refundValue),
+    netAmount: refundValue,
+  });
+
+  return {
+    serLines,
+    netSales: netSalesInfo.value,
+    diagnostics: { orderRow, refundRow, transferRow, grandTotalRow, serSkuRow, serNameRow },
+  };
+}
+
+// ---------- SKU + Refund tab extraction (Order block only; refund detail rows are never used) ----------
+
+function extractAmazonOrderLines(rawRows) {
+  let headerRow = -1;
+  for (let r = 0; r < rawRows.length; r++) {
+    const v = rawRows[r] && rawRows[r][0];
+    if (v != null && String(v).trim().toLowerCase() === "sku") { headerRow = r; break; }
+  }
+  if (headerRow < 0) {
+    throw new Error('Could not find the "sku" header in column A of the SKU + Refund tab (Order block).');
+  }
+  const records = [];
+  let currentSku = null;
+  for (let r = headerRow + 1; r < rawRows.length; r++) {
+    const row = rawRows[r] || [];
+    let skuCell = row[0];
+    const unitCost = row[1];
+    const qty = row[2];
+    const sales = row[3];
+    if (skuCell != null && String(skuCell).trim() !== "") {
+      const skuStr = String(skuCell).trim();
+      if (skuStr.toLowerCase() === "grand total") break; // end of Order block
+      if (/ total$/i.test(skuStr)) continue; // per-SKU subtotal row
+      currentSku = skuStr;
+    } else if (currentSku == null) {
+      continue;
+    }
+    if (qty == null || sales == null) continue;
+    records.push({ sku: currentSku, unitCost: toNumSafe(unitCost), qty: toNumSafe(qty), netAmount: toNumSafe(sales) });
+  }
+  return records;
+}
+
+// ---------- SKU remap (spec §4) ----------
+
+const AMAZON_SKU_REMAP = {
+  "IM8-FG-000035-SCOOP": "IM8-FG-000120",
+  "HM-53-0100": "IM8-FG-000076",
+  "HM-53-0104": "IM8-FG-000080",
+  "HM-53-0059": "IM8-FG-000053",
+};
+
+function amazonRemapSku(sku) {
+  return AMAZON_SKU_REMAP[sku] || sku;
+}
+
+// ---------- Build the full SO line table ----------
+
+function buildAmazonFgLines(orderRecords, itemMaster) {
+  const lines = [];
+  const unmapped = [];
+  for (const rec of orderRecords) {
+    const mapped = amazonRemapSku(rec.sku);
+    const master = itemMaster[mapped];
+    if (!master) {
+      unmapped.push(mapped);
+      lines.push({
+        "Item number": mapped, "Product name": "", Unit: "",
+        Quantity: rec.qty, "Unit price": rec.unitCost, "Net amount": rec.netAmount,
+      });
+      continue;
+    }
+    lines.push({
+      "Item number": mapped, "Product name": master.name, Unit: master.unit,
+      Quantity: rec.qty, "Unit price": rec.unitCost, "Net amount": rec.netAmount,
+    });
+  }
+  return { lines, unmapped: Array.from(new Set(unmapped)) };
+}
+
+function buildAmazonSerLines(serLines) {
+  return serLines.map((l) => ({
+    "Item number": l.sku, "Product name": l.name, Unit: "ea",
+    Quantity: l.qty, "Unit price": l.unitPrice, "Net amount": l.netAmount,
+  }));
+}
+
+const AMAZON_TEMPLATE_FIELD_DEFAULTS_FG = {
+  "Variant number": null, "Bundle sales item": null, "Bundle Retail VariantId": null,
+  "Sales category": null, Style: null, "Delivery type": "Stock", "Adjusted unit price": 0,
+  Site: "Prenetics", Warehouse: "USOPS-WH02", "Batch number": null, Location: "Primary",
+  Discount: 0, "Discount percent": 0, Currency: "USD", "Line status": "Open order",
+  "Adjusted net amount": 0, "Quality order status": null, "Deliver now": 0, "Line type": "Regular",
+  "Source code": null, Load: null, "Packing quantity": 0, "Same batch selection": "No",
+  "Fulfillment status": "Unknown", "DOM Status": "Not processed", "Promotion Code": null,
+  "Refund transaction ID": null, "Disposition code": null, "Return reason code": null,
+  "Total discount amount": 0, "Discount type": null, "Modified by": "suki.chan",
+};
+const AMAZON_TEMPLATE_FIELD_DEFAULTS_SER = {
+  ...AMAZON_TEMPLATE_FIELD_DEFAULTS_FG,
+  Warehouse: null,
+  Location: null,
+};
+
+function buildAmazonSoLineTable(fgLines, serLines) {
+  const now = new Date();
+  const rows = [];
+  for (const l of fgLines) {
+    rows.push({
+      ...AMAZON_TEMPLATE_FIELD_DEFAULTS_FG,
+      "Item number": l["Item number"], "Product name": l["Product name"], Unit: l.Unit,
+      Quantity: l.Quantity, "Unit price": l["Unit price"], "Net amount": l["Net amount"],
+      "Created date and time": now,
+    });
+  }
+  for (const l of serLines) {
+    rows.push({
+      ...AMAZON_TEMPLATE_FIELD_DEFAULTS_SER,
+      "Item number": l["Item number"], "Product name": l["Product name"], Unit: l.Unit,
+      Quantity: l.Quantity, "Unit price": l["Unit price"], "Net amount": l["Net amount"],
+      "Created date and time": now,
+    });
+  }
+  return rows.map((r) => {
+    const ordered = {};
+    for (const col of AMAZON_SO_TEMPLATE_COLUMNS) ordered[col] = r[col] === undefined ? null : r[col];
+    return ordered;
+  });
+}
+
+function amazonReconcile(rows, netSales, tolerance) {
+  const tol = tolerance == null ? 0.01 : tolerance;
+  const sum = rows.reduce((s, r) => s + toNumSafe(r["Net amount"]), 0);
+  const diff = Math.round((sum - netSales) * 100) / 100;
+  return { sum: Math.round(sum * 100) / 100, netSales, diff, reconciled: Math.abs(diff) <= tol };
+}
+
+// Browser namespace — app.js calls these as taskF.xxx(...).
+if (typeof window !== "undefined") {
+  window.taskF = {
+    AMAZON_DUTY_TAX_SKU,
+    AMAZON_REFUND_SKU,
+    AMAZON_SO_TEMPLATE_COLUMNS,
+    AMAZON_ITEM_MASTER_SEED,
+    AMAZON_SER_NAME_SEED,
+    AMAZON_SKU_REMAP,
+    toNumSafe,
+    amazonFindRowByLabel,
+    amazonFindSerSkuRow,
+    amazonFindNetSales,
+    extractAmazonSummary,
+    extractAmazonOrderLines,
+    amazonRemapSku,
+    buildAmazonFgLines,
+    buildAmazonSerLines,
+    buildAmazonSoLineTable,
+    amazonReconcile,
+  };
+}
+
+if (typeof module !== "undefined") {
+  module.exports = {
+    AMAZON_DUTY_TAX_SKU,
+    AMAZON_REFUND_SKU,
+    AMAZON_SO_TEMPLATE_COLUMNS,
+    AMAZON_ITEM_MASTER_SEED,
+    AMAZON_SER_NAME_SEED,
+    AMAZON_SKU_REMAP,
+    toNumSafe,
+    amazonFindRowByLabel,
+    amazonFindSerSkuRow,
+    amazonFindNetSales,
+    extractAmazonSummary,
+    extractAmazonOrderLines,
+    amazonRemapSku,
+    buildAmazonFgLines,
+    buildAmazonSerLines,
+    buildAmazonSoLineTable,
+    amazonReconcile,
   };
 }
 
@@ -6093,6 +6491,162 @@ function renderTaskE() {
   renderTaskEConfig();
 }
 
+// ---------------- Task F ----------------
+
+// FG/SER item-name overrides persisted in this browser (see task_f.js's
+// AMAZON_ITEM_MASTER_SEED/AMAZON_SER_NAME_SEED for the built-in defaults) —
+// separate from Task A's item master since Amazon needs the D365 unit of
+// measure too, not just the product name.
+const AMAZON_ITEM_MASTER_STORAGE_KEY = "im8OpsToolAmazonItemMasterV1";
+
+function loadAmazonItemMasterFromStorage() {
+  try {
+    const raw = localStorage.getItem(AMAZON_ITEM_MASTER_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : { ...taskF.AMAZON_ITEM_MASTER_SEED };
+  } catch (e) {
+    return { ...taskF.AMAZON_ITEM_MASTER_SEED };
+  }
+}
+function saveAmazonItemMasterToStorage(map) {
+  try {
+    localStorage.setItem(AMAZON_ITEM_MASTER_STORAGE_KEY, JSON.stringify(map));
+  } catch (e) {
+    // Storage disabled/full — still works for this page load.
+  }
+}
+
+const taskFState = {
+  wb: null,
+  fileName: "",
+  itemMaster: loadAmazonItemMasterFromStorage(),
+  serNames: { ...taskF.AMAZON_SER_NAME_SEED },
+};
+
+async function handleTaskFAmazonFile(file) {
+  const infoBox = document.getElementById("task-f-file-info");
+  infoBox.innerHTML = "";
+  document.getElementById("task-f-results").innerHTML = "";
+  if (!file) {
+    taskFState.wb = null;
+    taskFState.fileName = "";
+    return;
+  }
+  const source = await loadWorkbookOrCsv(file);
+  if (!source.wb) {
+    infoBox.appendChild(h("p", { class: "error", text: "This isn't a multi-tab Excel workbook — upload the original .xlsx transactions export." }));
+    return;
+  }
+  const sheets = io.listSheets(source.wb) || [];
+  const summarySheet = sheets.find((s) => taskC.normText(s).includes("summary")) || sheets[0];
+  const skuRefundSheet = sheets.find((s) => taskC.normText(s).includes("sku") && taskC.normText(s).includes("refund"));
+  if (!summarySheet || !skuRefundSheet) {
+    infoBox.appendChild(h("p", { class: "error", text: `Couldn't find both a "Summary" and a "SKU + Refund" tab in this file. Sheets found: ${sheets.join(", ")}` }));
+    return;
+  }
+  taskFState.wb = source.wb;
+  taskFState.fileName = file.name;
+  taskFState.summarySheet = summarySheet;
+  taskFState.skuRefundSheet = skuRefundSheet;
+  infoBox.appendChild(h("p", { class: "caption", text: `Loaded '${file.name}'. Summary tab: '${summarySheet}'. SKU + Refund tab: '${skuRefundSheet}'.` }));
+  computeTaskF();
+}
+
+function renderAmazonItemMasterEditor(container, unmapped) {
+  container.innerHTML = "";
+  container.appendChild(h("h4", { text: "FG item master (Item number → Product name / Unit)" }));
+  container.appendChild(h("p", { class: "caption", text: "Saved in this browser and reused every month. Only new/unrecognized SKUs need filling in below." }));
+  if (unmapped.length) {
+    container.appendChild(h("p", { class: "warning", text: `Unmapped item number(s) — fill these in and rebuild: ${unmapped.join(", ")}` }));
+  }
+  const grid = h("div", { class: "col-grid" });
+  for (const sku of unmapped) {
+    const wrap = h("div", { class: "file-row" });
+    wrap.appendChild(h("label", { text: sku + ": " }));
+    const nameInput = h("input", { type: "text", placeholder: "Product name" });
+    const unitInput = h("input", { type: "text", placeholder: "Unit (e.g. Box, Set, Pouch)" });
+    const save = () => {
+      if (!nameInput.value.trim() || !unitInput.value.trim()) return;
+      taskFState.itemMaster[sku] = { name: nameInput.value.trim(), unit: unitInput.value.trim() };
+      saveAmazonItemMasterToStorage(taskFState.itemMaster);
+    };
+    nameInput.addEventListener("change", save);
+    unitInput.addEventListener("change", save);
+    wrap.appendChild(nameInput);
+    wrap.appendChild(unitInput);
+    grid.appendChild(wrap);
+  }
+  container.appendChild(grid);
+  if (unmapped.length) {
+    const rebuildBtn = h("button", { text: "Rebuild with these mappings" });
+    rebuildBtn.addEventListener("click", () => computeTaskF());
+    container.appendChild(rebuildBtn);
+  }
+}
+
+function computeTaskF() {
+  const resultsBox = document.getElementById("task-f-results");
+  const masterBox = document.getElementById("task-f-item-master");
+  resultsBox.innerHTML = "";
+  if (!taskFState.wb) { ops2SyncRun("tab-f", false, 1); return; }
+
+  let summaryResult, orderRecords;
+  try {
+    const summaryRaw = io.sheetToRawRows(taskFState.wb, taskFState.summarySheet, null);
+    summaryResult = taskF.extractAmazonSummary(summaryRaw, taskFState.serNames);
+    const skuRefundRaw = io.sheetToRawRows(taskFState.wb, taskFState.skuRefundSheet, null);
+    orderRecords = taskF.extractAmazonOrderLines(skuRefundRaw);
+  } catch (e) {
+    ops2SyncRun("tab-f", false, 0);
+    resultsBox.appendChild(h("p", { class: "error", text: e.message }));
+    return;
+  }
+  ops2SyncRun("tab-f", true, 0);
+
+  const { lines: fgLines, unmapped } = taskF.buildAmazonFgLines(orderRecords, taskFState.itemMaster);
+  renderAmazonItemMasterEditor(masterBox, unmapped);
+
+  const serLines = taskF.buildAmazonSerLines(summaryResult.serLines);
+  const table = taskF.buildAmazonSoLineTable(fgLines, serLines);
+  const rec = taskF.amazonReconcile(table, summaryResult.netSales);
+
+  const summaryLine = h("p", {
+    class: rec.reconciled ? "info" : "error",
+    text: `${fgLines.length} order line(s) + ${serLines.length} SER line(s) = ${table.length} row(s). ` +
+      `Sum of Net amount: ${rec.sum.toFixed(2)} vs Net sales: ${rec.netSales.toFixed(2)} ` +
+      (rec.reconciled ? "— reconciled to the cent." : `— OFF BY ${rec.diff.toFixed(2)}. Check refund double-count, the column-M sign, and whether Duty & Tax nets to ~0 before downloading.`),
+  });
+  resultsBox.appendChild(summaryLine);
+
+  if (unmapped.length) {
+    resultsBox.appendChild(h("p", { class: "warning", text: "Fill in the item master above and rebuild before downloading — unmapped rows have blank Product name / Unit." }));
+  }
+
+  const btn = h("button", { class: "run-btn", text: "Download D365 SO Lines (.xlsx)" });
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Building file...";
+    try {
+      const buf = await io.toExcelBytes({ "Sheet1": table });
+      const stamp = taskFState.fileName.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "_") || todayStamp();
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `Amazon_SO_Lines_Completed_${stamp}.xlsx`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+  resultsBox.appendChild(btn);
+
+  const tblContainer = h("div", {});
+  resultsBox.appendChild(tblContainer);
+  renderTable(table, tblContainer, 200);
+}
+
+function renderTaskF() {
+  const masterBox = document.getElementById("task-f-item-master");
+  if (masterBox && !taskFState.wb) renderAmazonItemMasterEditor(masterBox, []);
+}
+
 function initTabs() {
   document.querySelectorAll(".tab-button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -6199,11 +6753,17 @@ function init() {
   ops2InitFileCounts("tab-e", ["e-tiktok-file"], []);
   ops2InitEmptyState("tab-e");
 
+  onFileChange("f-amazon-file", "Loading Amazon transactions file...", (e) => handleTaskFAmazonFile(e.target.files[0]));
+  document.getElementById("f-amazon-clear").addEventListener("click", () => { document.getElementById("f-amazon-file").value = ""; handleTaskFAmazonFile(null); });
+  ops2InitFileCounts("tab-f", ["f-amazon-file"], []);
+  ops2InitEmptyState("tab-f");
+
   renderTaskA();
   renderTaskB();
   renderTaskC();
   renderTaskD();
   renderTaskE();
+  renderTaskF();
 }
 
 document.addEventListener("DOMContentLoaded", init);
