@@ -52,26 +52,31 @@ const REGION_DEFAULTS = {
 };
 
 // ---------- Template field defaults (spec step 4) ----------
-
-const TEMPLATE_FIELD_DEFAULTS = {
-  "Adjusted unit price": 0,
-  "Adjusted net amount": 0,
-  "Delivery type": "Stock",
-  Site: "Prenetics",
-  Currency: "USD",
-  "Line status": "Invoiced",
-  "Line type": "Regular",
-  "Same batch selection": "No",
-  "Fulfillment status": "Unknown",
-  "DOM Status": "Not processed",
-};
+// Full D365 SO Line import layout (all 39 columns) — verified against a
+// real, hand-checked output file. Every default below is that file's own
+// value across both an FG row and a SER row (both agree on every column).
 
 const SO_LINE_COLUMNS = [
-  "Item number", "Product name", "Warehouse", "Location", "Unit price", "Discount",
-  "Quantity", "Net amount", "Adjusted unit price", "Adjusted net amount",
-  "Delivery type", "Site", "Currency", "Line status", "Line type",
-  "Same batch selection", "Fulfillment status", "DOM Status",
+  "Variant number", "Bundle sales item", "Bundle Retail VariantId", "Item number", "Product name",
+  "Sales category", "Quantity", "Unit", "Style", "Delivery type", "Adjusted unit price", "Site",
+  "Warehouse", "Batch number", "Location", "Unit price", "Discount", "Discount percent", "Net amount",
+  "Currency", "Line status", "Adjusted net amount", "Quality order status", "Deliver now", "Line type",
+  "Source code", "Load", "Packing quantity", "Created date and time", "Same batch selection",
+  "Fulfillment status", "DOM Status", "Promotion Code", "Refund transaction ID", "Disposition code",
+  "Return reason code", "Total discount amount", "Discount type", "Modified by",
 ];
+
+const TEMPLATE_FIELD_DEFAULTS = {
+  "Variant number": null, "Bundle sales item": null, "Bundle Retail VariantId": null,
+  "Sales category": null, Style: null, "Delivery type": "Stock", "Adjusted unit price": 0,
+  Site: "Prenetics", "Batch number": null, Discount: 0, "Discount percent": 0, Currency: "USD",
+  "Line status": "Invoiced", "Adjusted net amount": 0, "Quality order status": null, "Deliver now": 0,
+  "Line type": "Regular", "Source code": null, Load: null, "Packing quantity": 0,
+  "Created date and time": null, "Same batch selection": "No", "Fulfillment status": "Unknown",
+  "DOM Status": "Not processed", "Promotion Code": null, "Refund transaction ID": null,
+  "Disposition code": null, "Return reason code": null, "Total discount amount": 0,
+  "Discount type": null, "Modified by": null,
+};
 
 // ---------- Generic row-wise table extraction ----------
 
@@ -297,7 +302,7 @@ function buildSerLinesFromSignedAmounts(records) {
     }
     const qty = amount < 0 ? -1 : 1;
     lines.push({
-      "Item number": rec.itemCode, "Product name": rec.feeType, Warehouse: "", Location: "",
+      "Item number": rec.itemCode, "Product name": rec.feeType, Warehouse: null, Location: null, Unit: "ea",
       "Unit price": Math.abs(amount), Discount: 0, Quantity: qty, "Net amount": amount,
     });
   }
@@ -358,9 +363,14 @@ function splitVirtualBundle(row, composition, allocation) {
 // itemRecords: from extractRowRecords (fields sku/productName/unitPrice/
 // discount/qty). bundleCompositions: {bundleSkuOrName: {composition, allocation}}
 // keyed by the exact SKU/product-name text seen in the source row.
-function buildFgLines(itemRecords, warehouse, location, bundleCompositions) {
+// itemMaster (optional): {item number: {name, unit}} — the D365 template's
+// own "Unit" column (e.g. "Box", "Pouch") isn't in the source file at all,
+// so it's backfilled from the same shared FG item master Task F uses; a
+// source row's own Product name (when present) still wins over the master.
+function buildFgLines(itemRecords, warehouse, location, bundleCompositions, itemMaster) {
   const lines = [];
   const unresolvedBundles = [];
+  const master = (sku) => (itemMaster && itemMaster[sku]) || null;
   for (const rec of itemRecords) {
     const nameOrSku = rec.productName || rec.sku;
     if (isVirtualBundleName(rec.sku) || isVirtualBundleName(rec.productName)) {
@@ -377,11 +387,13 @@ function buildFgLines(itemRecords, warehouse, location, bundleCompositions) {
       }
       const split = splitVirtualBundle({ ...rec, warehouse, location }, bundle.composition, bundle.allocation);
       for (const s of split) {
+        const m = master(s.item);
         lines.push({
           "Item number": s.item,
-          "Product name": s.productName || "",
+          "Product name": s.productName || (m && m.name) || "",
           Warehouse: warehouse,
           Location: location,
+          Unit: (m && m.unit) || "",
           "Unit price": s.unitPrice,
           Discount: s.discount,
           Quantity: s.qty,
@@ -394,11 +406,13 @@ function buildFgLines(itemRecords, warehouse, location, bundleCompositions) {
     const qty = toNumSafe(rec.qty);
     const unitPrice = toNumSafe(rec.unitPrice);
     const discount = toNumSafe(rec.discount);
+    const m = master(rec.sku);
     lines.push({
       "Item number": rec.sku,
-      "Product name": rec.productName == null ? "" : String(rec.productName),
+      "Product name": rec.productName != null ? String(rec.productName) : (m && m.name) || "",
       Warehouse: warehouse,
       Location: location,
+      Unit: (m && m.unit) || "",
       "Unit price": unitPrice,
       Discount: discount,
       Quantity: qty,
@@ -439,8 +453,9 @@ function buildFeeLines(feeRecords, itemCodeOverrides, isReimbursementFn) {
     lines.push({
       "Item number": itemCode,
       "Product name": rec.feeType,
-      Warehouse: "",
-      Location: "",
+      Warehouse: null,
+      Location: null,
+      Unit: "ea",
       "Unit price": unitPrice,
       Discount: 0,
       Quantity: qty,
@@ -453,17 +468,23 @@ function buildFeeLines(feeRecords, itemCodeOverrides, isReimbursementFn) {
 // ---------- Final SO line table + reconciliation (spec steps 4-5) ----------
 
 function buildSoLineTable(fgLines, feeLines) {
-  return [...fgLines, ...feeLines].map((l) => ({
-    "Item number": l["Item number"],
-    "Product name": l["Product name"] || "",
-    Warehouse: l.Warehouse || "",
-    Location: l.Location || "",
-    "Unit price": l["Unit price"],
-    Discount: l.Discount || 0,
-    Quantity: l.Quantity,
-    "Net amount": l["Net amount"],
-    ...TEMPLATE_FIELD_DEFAULTS,
-  }));
+  return [...fgLines, ...feeLines].map((l) => {
+    const merged = {
+      "Item number": l["Item number"],
+      "Product name": l["Product name"] || "",
+      Warehouse: l.Warehouse == null || l.Warehouse === "" ? null : l.Warehouse,
+      Location: l.Location == null || l.Location === "" ? null : l.Location,
+      Unit: l.Unit || "",
+      "Unit price": l["Unit price"],
+      Discount: l.Discount || 0,
+      Quantity: l.Quantity,
+      "Net amount": l["Net amount"],
+      ...TEMPLATE_FIELD_DEFAULTS,
+    };
+    const ordered = {};
+    for (const col of SO_LINE_COLUMNS) ordered[col] = merged[col] === undefined ? null : merged[col];
+    return ordered;
+  });
 }
 
 function reconcile(rows, referenceTotal, tolerance) {

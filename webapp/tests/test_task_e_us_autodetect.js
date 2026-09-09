@@ -36,9 +36,22 @@ assert(Math.abs(auto.referenceTotal - 16860.08) < 0.01, `expected the Net earnin
 // ("IM8-FG-000127 & IM8-FG-000198 (virtual bundle)") is just its own two
 // real SKUs joined by "&", so it must auto-resolve on its own.
 const regionInfo = taskE.REGION_DEFAULTS.US;
-const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(auto.itemRecords, regionInfo.warehouse, regionInfo.location, {});
+// Real Item numbers/units seen in this file's own hand-verified output —
+// stands in for the shared FG item master (Task F) at test time.
+const itemMaster = {
+  "IM8-FG-000127": { name: "Tritan Shaker Bottle, 630ml", unit: "pcs" },
+  "IM8-FG-000198": { name: "Essentials - Travel Box Set (7ct), Variety - STD", unit: "Box" },
+  "IM8-FG-000186": { name: "Daily Ultimate Essentials Pro - Mango + Passion Fruit Trial Pack (7ct)", unit: "Box" },
+  "IM8-FG-000254": { name: "Retail - Essentials V2 - Travel Box Set (30ct), Variety -STD", unit: "Box" },
+  "IM8-FG-000149": { name: "Daily Ultimate Essentials Pro - Acai + Mixed Berries Trial Pack (7ct)", unit: "Box" },
+  "IM8-FG-000185": { name: "Daily Ultimate Essentials Pro - Lemon + Orange Trial Pack (7ct)", unit: "Box" },
+};
+const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(auto.itemRecords, regionInfo.warehouse, regionInfo.location, {}, itemMaster);
 assert(unresolvedBundles.length === 0, "this file's bundle name is real SKUs joined by & and must auto-resolve with no composition supplied");
 assert(fgLines.length === 20, `expected 20 FG lines after bundle-splitting (17 raw rows, 3 of which are the bundle and split into 2 each), got ${fgLines.length}`);
+assert(fgLines.every((l) => l["Product name"] && l.Unit), "every FG line should have its Product name and Unit backfilled from the item master");
+assert(fgLines.find((l) => l["Item number"] === "IM8-FG-000127").Unit === "pcs", "IM8-FG-000127's real Unit is 'pcs', not the generic default other SKUs share");
+assert(fgLines.find((l) => l["Item number"] === "IM8-FG-000198").Unit === "Box", "IM8-FG-000198's real Unit is 'Box'");
 
 const feeRecordsAll = auto.feeRecords.concat(auto.refundLine ? [auto.refundLine] : []);
 const { lines: feeLines, zeroSkipped } = taskE.buildSerLinesFromSignedAmounts(feeRecordsAll);
@@ -64,6 +77,20 @@ assert(rec.reconciled, `expected the real file to reconcile to the cent against 
 const expectedWb = io.loadWorkbook(fs.readFileSync(expectedPath), expectedPath);
 const expectedRows = io.loadTableFromRawRows(io.sheetToRawRows(expectedWb, "Sheet1", null), 0);
 assert(expectedRows.length === table.length, `expected our table to match the real output file's row count (${expectedRows.length}), got ${table.length}`);
+
+const expectedColumns = Object.keys(expectedRows[0]);
+assert(expectedColumns.length === 39, `sanity check: expected the real output file to have all 39 D365 SO Line columns, got ${expectedColumns.length}`);
+assert(JSON.stringify(Object.keys(table[0])) === JSON.stringify(expectedColumns), `our table's column set/order must match the real output file's exactly.\nours: ${JSON.stringify(Object.keys(table[0]))}\ntheirs: ${JSON.stringify(expectedColumns)}`);
+
+const check127 = table.find((r) => r["Item number"] === "IM8-FG-000127" && r.Quantity === 8);
+const expected127 = expectedRows.find((r) => r["Item number"] === "IM8-FG-000127" && r.Quantity === 8);
+for (const col of expectedColumns) {
+  if (col === "Created date and time") continue; // timestamp-ish/blank in both — not worth a brittle exact-equality check
+  assert(
+    JSON.stringify(check127[col]) === JSON.stringify(expected127[col]),
+    `column "${col}" for IM8-FG-000127 (qty 8) should match the real output exactly: ours=${JSON.stringify(check127[col])} theirs=${JSON.stringify(expected127[col])}`
+  );
+}
 
 const expectedNetSum = expectedRows.reduce((s, r) => s + (typeof r["Net amount"] === "number" ? r["Net amount"] : 0), 0);
 const ourNetSum = table.reduce((s, r) => s + (typeof r["Net amount"] === "number" ? r["Net amount"] : 0), 0);

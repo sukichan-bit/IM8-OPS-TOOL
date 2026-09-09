@@ -2207,7 +2207,7 @@ function computeTaskE() {
   }
 
   const regionInfo = TASK_E_REGION_INFO[taskEState.region];
-  const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(itemRecords, regionInfo.warehouse, regionInfo.location, taskEState.bundleCompositions);
+  const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(itemRecords, regionInfo.warehouse, regionInfo.location, taskEState.bundleCompositions, taskFState.itemMaster);
 
   if (unresolvedBundles.length) {
     taskEBuildBundleUI(bundleBox, unresolvedBundles);
@@ -2322,7 +2322,12 @@ function computeTaskEAuto() {
 
   const auto = taskEState.auto;
   const regionInfo = TASK_E_REGION_INFO[taskEState.region];
-  const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(auto.itemRecords, regionInfo.warehouse, regionInfo.location, taskEState.bundleCompositions);
+  // The Summary tab never carries Product name or Unit — both are
+  // backfilled from the same shared FG item master Task F uses (it's the
+  // only place in the tool that captures a SKU's D365 Unit, not just its
+  // name), flagging anything still unmapped rather than shipping a blank
+  // Product name/Unit silently.
+  const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(auto.itemRecords, regionInfo.warehouse, regionInfo.location, taskEState.bundleCompositions, taskFState.itemMaster);
 
   if (unresolvedBundles.length) {
     taskEBuildBundleUI(bundleBox, unresolvedBundles);
@@ -2330,21 +2335,11 @@ function computeTaskEAuto() {
     return;
   }
 
-  // The Summary tab never carries product names — backfill from the same
-  // shared item master Task A uses (upload it there once; every SKU seen
-  // there benefits here too), flagging anything still unmapped rather than
-  // shipping a blank Product name silently.
-  const unmappedNames = [];
-  for (const line of fgLines) {
-    if (line["Product name"]) continue;
-    const name = itemMasterState.map[line["Item number"]];
-    if (name) line["Product name"] = name;
-    else unmappedNames.push(line["Item number"]);
-  }
-  if (unmappedNames.length) {
+  const unmapped = Array.from(new Set(fgLines.filter((l) => !l["Product name"] || !l.Unit).map((l) => l["Item number"])));
+  if (unmapped.length) {
     resultsBox.appendChild(h("p", {
       class: "warning",
-      text: `${Array.from(new Set(unmappedNames)).length} SKU(s) have no Product name in the shared item master (Task A) — upload/extend it there, then come back and rebuild: ${Array.from(new Set(unmappedNames)).join(", ")}`,
+      text: `${unmapped.length} SKU(s) have no Product name/Unit in the shared item master (Task F) — upload/extend it there, then come back and rebuild: ${unmapped.join(", ")}`,
     }));
   }
 
