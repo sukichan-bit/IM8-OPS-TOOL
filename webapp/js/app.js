@@ -2066,6 +2066,7 @@ const taskEState = {
   feeTransposed: { startCol: "", endCol: "", feeTypeRow: "", itemCodeRow: "", amountRow: "" },
   referenceTotal: "",
   bundleCompositions: {},
+  auto: null, // set by tryAutoDetectTaskE() — result of taskE.autoDetectUsSummaryTable, or null
 };
 
 function taskERawRows(sheetName) {
@@ -2108,6 +2109,21 @@ function renderRawGridPreview(container, rawRows, maxRows, maxCols) {
   }
 }
 
+// Attempts auto-detection for the currently-selected region against the
+// already-loaded workbook. Only wired up for US so far (verified against a
+// real file) — other regions always fall through to the manual sheet/
+// range/column configuration form below, unchanged.
+function tryAutoDetectTaskE() {
+  taskEState.auto = null;
+  if (!taskEState.wb || taskEState.region !== "US" || !taskEState.itemSheet) return;
+  try {
+    const rawRows = taskERawRows(taskEState.itemSheet);
+    taskEState.auto = taskE.autoDetectUsSummaryTable(rawRows);
+  } catch (e) {
+    taskEState.auto = null;
+  }
+}
+
 async function handleTaskETikTokFile(file) {
   const infoBox = document.getElementById("task-e-file-info");
   infoBox.innerHTML = "";
@@ -2116,6 +2132,7 @@ async function handleTaskETikTokFile(file) {
     taskEState.sheets = [];
     taskEState.itemSheet = null;
     taskEState.feeSheet = null;
+    taskEState.auto = null;
     renderTaskEConfig();
     return;
   }
@@ -2131,6 +2148,7 @@ async function handleTaskETikTokFile(file) {
   taskEState.itemSheet = guess || taskEState.sheets[0] || null;
   taskEState.feeSheet = taskEState.itemSheet;
   infoBox.appendChild(h("p", { class: "caption", text: `Loaded. Sheets: ${taskEState.sheets.join(", ")}` }));
+  tryAutoDetectTaskE();
   renderTaskEConfig();
 }
 
@@ -2154,7 +2172,7 @@ function taskEBuildBundleUI(container, unresolvedBundles) {
     container.appendChild(wrap);
   }
   const btn = h("button", { text: "Rebuild with these components" });
-  btn.addEventListener("click", () => computeTaskE());
+  btn.addEventListener("click", () => (taskEState.auto ? computeTaskEAuto() : computeTaskE()));
   container.appendChild(btn);
 }
 
@@ -2274,6 +2292,100 @@ function computeTaskE() {
   renderTable(table, tblContainer, 200);
 }
 
+// ---------------- Task E — US auto-detected path ----------------
+// Reads the file's own "Summary" pivot directly (see
+// taskE.autoDetectUsSummaryTable's own comment for the exact landmarks),
+// with no sheet/range/column configuration needed. Falls back to the
+// manual form above whenever detection doesn't find what it expects.
+
+function renderTaskEAutoPanel(configBox, previewBox) {
+  const d = taskEState.auto.diagnostics;
+  configBox.appendChild(h("p", {
+    class: "info",
+    text: `Auto-detected the "${taskEState.itemSheet}" tab's Summary layout — header row ${d.headerRow}, fee Grand Total row ${d.topGrandRow}, item table header row ${d.skuHeaderRow}, item table Grand Total row ${d.bottomGrandRow}.`,
+  }));
+  configBox.appendChild(h("p", {
+    class: "caption",
+    text: `Net sales: fee pivot ${d.topNetSales.toFixed(2)} vs. item table ${d.bottomNetSales.toFixed(2)} → Refund line ${d.refundAmount.toFixed(2)}. Reconciliation target (Net earnings): ${d.netEarnings.toFixed(2)}.`,
+  }));
+  const manualBtn = h("button", { class: "clear-btn", text: "Use manual configuration instead" });
+  manualBtn.addEventListener("click", () => { taskEState.auto = null; renderTaskEConfig(); });
+  configBox.appendChild(manualBtn);
+  renderRawGridPreview(previewBox, taskERawRows(taskEState.itemSheet));
+}
+
+function computeTaskEAuto() {
+  const resultsBox = document.getElementById("task-e-results");
+  const bundleBox = document.getElementById("task-e-bundles");
+  resultsBox.innerHTML = "";
+  bundleBox.innerHTML = "";
+
+  const auto = taskEState.auto;
+  const regionInfo = TASK_E_REGION_INFO[taskEState.region];
+  const { lines: fgLines, unresolvedBundles } = taskE.buildFgLines(auto.itemRecords, regionInfo.warehouse, regionInfo.location, taskEState.bundleCompositions);
+
+  if (unresolvedBundles.length) {
+    taskEBuildBundleUI(bundleBox, unresolvedBundles);
+    resultsBox.appendChild(h("p", { class: "warning", text: `${unresolvedBundles.length} virtual bundle SKU(s) need component mapping before SO lines can be built — see below.` }));
+    return;
+  }
+
+  // The Summary tab never carries product names — backfill from the same
+  // shared item master Task A uses (upload it there once; every SKU seen
+  // there benefits here too), flagging anything still unmapped rather than
+  // shipping a blank Product name silently.
+  const unmappedNames = [];
+  for (const line of fgLines) {
+    if (line["Product name"]) continue;
+    const name = itemMasterState.map[line["Item number"]];
+    if (name) line["Product name"] = name;
+    else unmappedNames.push(line["Item number"]);
+  }
+  if (unmappedNames.length) {
+    resultsBox.appendChild(h("p", {
+      class: "warning",
+      text: `${Array.from(new Set(unmappedNames)).length} SKU(s) have no Product name in the shared item master (Task A) — upload/extend it there, then come back and rebuild: ${Array.from(new Set(unmappedNames)).join(", ")}`,
+    }));
+  }
+
+  const feeRecordsAll = auto.feeRecords.concat(auto.refundLine ? [auto.refundLine] : []);
+  const { lines: feeLines, zeroSkipped } = taskE.buildSerLinesFromSignedAmounts(feeRecordsAll);
+  const table = taskE.buildSoLineTable(fgLines, feeLines);
+
+  if (zeroSkipped.length) {
+    resultsBox.appendChild(h("p", { class: "caption", text: `${zeroSkipped.length} fee column(s) skipped ($0 total): ${zeroSkipped.join(", ")}` }));
+  }
+
+  const rec = taskE.reconcile(table, auto.referenceTotal);
+  resultsBox.appendChild(
+    h("p", {
+      class: rec.reconciled ? "info" : "error",
+      text: rec.reconciled
+        ? `Reconciled: line total ${rec.sum.toFixed(2)} matches Net earnings ${rec.referenceTotal.toFixed(2)}.`
+        : `NOT reconciled: line total ${rec.sum.toFixed(2)} vs. Net earnings ${rec.referenceTotal.toFixed(2)} (diff ${rec.diff.toFixed(2)}). Switch to manual configuration above and check the raw preview — this file's layout may differ from the one auto-detection was built against.`,
+    })
+  );
+
+  const btn = h("button", { class: "run-btn", text: "Download SO lines (.xlsx)" });
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Building file...";
+    try {
+      const buf = await io.toExcelBytes({ "SO lines": table });
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()}_TikTok_${taskEState.region.replace("/", "-")}_SO_Lines.xlsx`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+  resultsBox.appendChild(btn);
+
+  const tblContainer = h("div", {});
+  resultsBox.appendChild(tblContainer);
+  renderTable(table, tblContainer, 200);
+}
+
 function renderTaskEConfig() {
   const configBox = document.getElementById("task-e-config");
   const previewBox = document.getElementById("task-e-preview");
@@ -2286,6 +2398,12 @@ function renderTaskEConfig() {
 
   if (!taskEState.wb) {
     configBox.appendChild(h("p", { class: "muted", text: "Upload a TikTok Transactions Details file to continue." }));
+    return;
+  }
+
+  if (taskEState.auto) {
+    renderTaskEAutoPanel(configBox, previewBox);
+    computeTaskEAuto();
     return;
   }
 
@@ -2610,7 +2728,17 @@ function init() {
 
   onFileChange("e-tiktok-file", "Loading TikTok transactions file...", (e) => handleTaskETikTokFile(e.target.files[0]));
   document.getElementById("e-tiktok-clear").addEventListener("click", () => { document.getElementById("e-tiktok-file").value = ""; handleTaskETikTokFile(null); });
-  document.getElementById("e-region").addEventListener("change", (e) => { taskEState.region = e.target.value; renderTaskEConfig(); });
+  document.getElementById("e-region").addEventListener("change", (e) => {
+    taskEState.region = e.target.value;
+    if (taskEState.wb) {
+      const hint = TASK_E_REGION_INFO[taskEState.region];
+      const guess = taskEState.sheets.find((s) => taskC.normText(s).includes(taskC.normText(hint.sheetHint)));
+      taskEState.itemSheet = guess || taskEState.sheets[0] || null;
+      taskEState.feeSheet = taskEState.itemSheet;
+      tryAutoDetectTaskE();
+    }
+    renderTaskEConfig();
+  });
   document.querySelectorAll("#e-region-seg button").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#e-region-seg button").forEach((b) => b.classList.remove("ops2-seg-active"));
