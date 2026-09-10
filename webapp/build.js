@@ -26,6 +26,7 @@ const taskC = read(path.join(ROOT, "js", "task_c.js"));
 const taskD = read(path.join(ROOT, "js", "task_d.js"));
 const taskE = read(path.join(ROOT, "js", "task_e.js"));
 const taskF = read(path.join(ROOT, "js", "task_f.js"));
+const taskG = read(path.join(ROOT, "js", "task_g.js"));
 const pdfExtract = read(path.join(ROOT, "js", "pdf_extract.js"));
 const appJs = read(path.join(ROOT, "js", "app.js"));
 
@@ -49,6 +50,7 @@ let out = template
   .replace("<!--TASK_D-->", () => taskD)
   .replace("<!--TASK_E-->", () => taskE)
   .replace("<!--TASK_F-->", () => taskF)
+  .replace("<!--TASK_G-->", () => taskG)
   .replace("<!--PDF_EXTRACT-->", () => pdfExtract)
   .replace("<!--APP_JS-->", () => appJs);
 

@@ -2699,6 +2699,418 @@ function renderTaskF() {
   if (masterBox && !taskFState.wb) renderAmazonItemMasterEditor(masterBox, []);
 }
 
+// ---------------- Task G ----------------
+
+// Rate cards are the user's own commercial data (never shipped with the
+// tool) — maintained in the browser and persisted here, same pattern as
+// Task F's item master.
+const FREIGHT_RATE_CARDS_STORAGE_KEY = "im8OpsToolFreightRateCardsV1";
+
+function loadFreightRateCardsFromStorage() {
+  const defaults = taskG.defaultRateCards();
+  try {
+    const raw = localStorage.getItem(FREIGHT_RATE_CARDS_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    // Cover a warehouse that has no saved cards yet (e.g. this tool was
+    // extended with a new warehouse after the user's last save).
+    for (const wh of taskG.FREIGHT_WAREHOUSES) {
+      if (!parsed[wh.id] || !parsed[wh.id].length) parsed[wh.id] = defaults[wh.id];
+    }
+    return parsed;
+  } catch (e) {
+    return defaults;
+  }
+}
+function saveFreightRateCardsToStorage(cards) {
+  try {
+    localStorage.setItem(FREIGHT_RATE_CARDS_STORAGE_KEY, JSON.stringify(cards));
+  } catch (e) {
+    // Storage disabled/full — still works for this page load.
+  }
+}
+
+const taskGState = {
+  rateCards: loadFreightRateCardsFromStorage(),
+  warehouseId: taskG.FREIGHT_WAREHOUSES[0].id,
+  rateCardId: null,
+  dest: {}, // { country } and/or { zone } and/or { zip }, depending on the card's zone source
+};
+
+function taskGCurrentCards() {
+  return taskGState.rateCards[taskGState.warehouseId] || [];
+}
+function taskGCurrentCard() {
+  const cards = taskGCurrentCards();
+  return cards.find((c) => c.id === taskGState.rateCardId) || cards[0] || null;
+}
+
+function renderTaskGWarehouseSelect() {
+  const select = document.getElementById("g-warehouse");
+  select.innerHTML = "";
+  taskG.FREIGHT_WAREHOUSES.forEach((w) => select.appendChild(h("option", { value: w.id, text: w.name })));
+  select.value = taskGState.warehouseId;
+}
+
+function renderTaskGRateCardSelect() {
+  const select = document.getElementById("g-ratecard");
+  select.innerHTML = "";
+  const cards = taskGCurrentCards();
+  cards.forEach((c) => select.appendChild(h("option", { value: c.id, text: c.name })));
+  if (!cards.find((c) => c.id === taskGState.rateCardId)) {
+    taskGState.rateCardId = cards.length ? cards[0].id : null;
+  }
+  if (taskGState.rateCardId) select.value = taskGState.rateCardId;
+}
+
+function renderTaskGDest() {
+  const box = document.getElementById("g-dest");
+  box.innerHTML = "";
+  const card = taskGCurrentCard();
+  if (!card) {
+    box.appendChild(h("p", { class: "warning", text: "No rate card for this warehouse yet — add one below." }));
+    return;
+  }
+
+  if (card.zoneSource === "usps") {
+    const wh = taskG.getWarehouse(card.warehouseId);
+    const wrap = h("div", { class: "col-field" });
+    wrap.appendChild(h("label", { text: "Destination ZIP code (US)" }));
+    const input = h("input", { type: "text", placeholder: "e.g. 90210" });
+    input.value = taskGState.dest.zip || "";
+    const info = h("p", { class: "caption" });
+    const updateInfo = () => {
+      const z = taskG.lookupUspsZone(wh.uspsOriginZip3, input.value);
+      if (z.error) {
+        info.textContent = input.value.trim() ? z.error : "";
+        info.className = input.value.trim() ? "error" : "caption";
+      } else {
+        info.textContent = `USPS Zone ${z.zone}${z.raw !== z.zone ? ` (chart shows "${z.raw}")` : ""} from ${wh.name}.`;
+        info.className = "caption";
+      }
+    };
+    input.addEventListener("input", () => { taskGState.dest = { zip: input.value.trim() }; updateInfo(); });
+    wrap.appendChild(input);
+    box.appendChild(wrap);
+    box.appendChild(info);
+    updateInfo();
+    return;
+  }
+
+  if (card.zones.length === 1) {
+    taskGState.dest = { zone: card.zones[0] };
+    box.appendChild(h("p", { class: "caption", text: `Single rate zone: ${card.zones[0]}.` }));
+    return;
+  }
+
+  const countries = Object.keys(card.countryZoneMap);
+  const grid = h("div", { class: "col-grid" });
+  if (countries.length) {
+    const cWrap = h("div", { class: "col-field" });
+    cWrap.appendChild(h("label", { text: "Destination country" }));
+    const cSelect = h("select", {});
+    countries.forEach((c) => cSelect.appendChild(h("option", { value: c, text: `${c} → ${card.countryZoneMap[c]}` })));
+    cSelect.addEventListener("change", () => { taskGState.dest = { country: cSelect.value }; });
+    taskGState.dest = { country: cSelect.value };
+    cWrap.appendChild(cSelect);
+    grid.appendChild(cWrap);
+  }
+  const zWrap = h("div", { class: "col-field" });
+  zWrap.appendChild(h("label", { text: countries.length ? "...or pick a zone directly" : "Destination zone" }));
+  const zSelect = h("select", {});
+  if (countries.length) zSelect.appendChild(h("option", { value: "", text: "(use country above)" }));
+  card.zones.forEach((z) => zSelect.appendChild(h("option", { value: z, text: z })));
+  zSelect.addEventListener("change", () => { if (zSelect.value) taskGState.dest = { zone: zSelect.value }; });
+  zWrap.appendChild(zSelect);
+  grid.appendChild(zWrap);
+  box.appendChild(grid);
+}
+
+function renderTaskGWeightConverted() {
+  const kgInput = document.getElementById("g-weight-kg");
+  const caption = document.getElementById("g-weight-converted");
+  const kg = parseFloat(kgInput.value);
+  if (!kg || kg <= 0) { caption.textContent = ""; return; }
+  const lb = taskG.convertWeight(kg, "kg", "lb");
+  const oz = taskG.convertWeight(kg, "kg", "oz");
+  caption.textContent = `= ${lb.toFixed(2)} lb = ${oz.toFixed(1)} oz`;
+}
+
+function computeTaskGQuote() {
+  const resultBox = document.getElementById("g-quote-result");
+  resultBox.innerHTML = "";
+  const card = taskGCurrentCard();
+  if (!card) { resultBox.appendChild(h("p", { class: "error", text: "Pick or add a rate card first." })); return; }
+
+  const totalWeightKg = parseFloat(document.getElementById("g-weight-kg").value);
+  const parcelCount = parseInt(document.getElementById("g-parcels").value, 10) || 1;
+  const l = parseFloat(document.getElementById("g-dim-l").value);
+  const w = parseFloat(document.getElementById("g-dim-w").value);
+  const ht = parseFloat(document.getElementById("g-dim-h").value);
+  const dimUnit = document.getElementById("g-dim-unit").value;
+  const dims = (l > 0 && w > 0 && ht > 0) ? { length: l, width: w, height: ht, unit: dimUnit } : null;
+
+  const quote = taskG.quoteFreight({ card, totalWeightKg, parcelCount, dims, dest: taskGState.dest });
+  if (quote.error) {
+    resultBox.appendChild(h("p", { class: "error", text: quote.error }));
+    return;
+  }
+
+  resultBox.appendChild(h("p", { class: "info", text:
+    `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
+  resultBox.appendChild(h("p", { class: "info", text:
+    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${quote.perParcelCost.toFixed(2)}` }));
+  const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${quote.totalCost.toFixed(2)}` });
+  totalP.style.fontSize = "1.25rem";
+  totalP.style.fontWeight = "800";
+  resultBox.appendChild(totalP);
+}
+
+function renderTaskGRateCardEditor() {
+  const root = document.getElementById("g-ratecard-editor");
+  root.innerHTML = "";
+  root.appendChild(h("h4", { text: "Rate card editor" }));
+  root.appendChild(h("p", { class: "caption", text: "Your own rate card data, saved in this browser. Add one card per destination scope (e.g. Local / EU / Rest of World) for the selected warehouse." }));
+
+  const cards = taskGCurrentCards();
+  const wh = taskG.getWarehouse(taskGState.warehouseId);
+
+  const listWrap = h("div", { class: "col-grid" });
+  cards.forEach((card) => {
+    const isActive = card.id === taskGState.rateCardId;
+    const btn = h("button", { class: isActive ? "run-btn" : "clear-btn", text: card.name });
+    btn.addEventListener("click", () => { taskGState.rateCardId = card.id; taskGState.dest = {}; renderTaskG(); });
+    listWrap.appendChild(btn);
+  });
+  root.appendChild(listWrap);
+
+  const addBtn = h("button", { class: "clear-btn", text: "+ Add new rate card" });
+  addBtn.addEventListener("click", () => {
+    const card = taskG.emptyManualCard(taskGState.warehouseId, `New rate card ${cards.length + 1}`, wh.weightUnit, wh.dimUnit);
+    taskGState.rateCards[taskGState.warehouseId].push(card);
+    taskGState.rateCardId = card.id;
+    saveFreightRateCardsToStorage(taskGState.rateCards);
+    renderTaskG();
+  });
+  root.appendChild(addBtn);
+
+  const card = taskGCurrentCard();
+  if (!card) return;
+
+  root.appendChild(h("hr", { class: "ops2-hr" }));
+
+  const nameWrap = h("div", { class: "col-field" });
+  nameWrap.appendChild(h("label", { text: "Rate card name" }));
+  const nameInput = h("input", { type: "text" });
+  nameInput.value = card.name;
+  nameInput.addEventListener("change", () => {
+    card.name = nameInput.value.trim() || card.name;
+    saveFreightRateCardsToStorage(taskGState.rateCards);
+    renderTaskG();
+  });
+  nameWrap.appendChild(nameInput);
+  root.appendChild(nameWrap);
+
+  if (cards.length > 1) {
+    const delBtn = h("button", { class: "clear-btn", text: "Delete this rate card" });
+    delBtn.addEventListener("click", () => {
+      taskGState.rateCards[taskGState.warehouseId] = cards.filter((c) => c.id !== card.id);
+      taskGState.rateCardId = null;
+      saveFreightRateCardsToStorage(taskGState.rateCards);
+      renderTaskG();
+    });
+    root.appendChild(delBtn);
+  }
+
+  const cfgGrid = h("div", { class: "col-grid" });
+
+  const modeWrap = h("div", { class: "col-field" });
+  modeWrap.appendChild(h("label", { text: "Pricing mode" }));
+  const modeSelect = h("select", {});
+  modeSelect.appendChild(h("option", { value: "bracket", text: "Weight brackets (flat price per range)" }));
+  modeSelect.appendChild(h("option", { value: "perUnit", text: "Base fee + per-unit rate" }));
+  modeSelect.value = card.mode;
+  modeSelect.addEventListener("change", () => { card.mode = modeSelect.value; saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+  modeWrap.appendChild(modeSelect);
+  cfgGrid.appendChild(modeWrap);
+
+  const wuWrap = h("div", { class: "col-field" });
+  wuWrap.appendChild(h("label", { text: "Rate card's weight unit" }));
+  const wuSelect = h("select", {});
+  ["kg", "lb", "oz"].forEach((u) => wuSelect.appendChild(h("option", { value: u, text: u })));
+  wuSelect.value = card.weightUnit;
+  wuSelect.addEventListener("change", () => { card.weightUnit = wuSelect.value; saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+  wuWrap.appendChild(wuSelect);
+  cfgGrid.appendChild(wuWrap);
+
+  if (wh.uspsOriginZip3) {
+    const zsWrap = h("div", { class: "col-field" });
+    zsWrap.appendChild(h("label", { text: "Destination zone source" }));
+    const zsSelect = h("select", {});
+    zsSelect.appendChild(h("option", { value: "manual", text: "Manual zones / countries" }));
+    zsSelect.appendChild(h("option", { value: "usps", text: "USPS zone (auto, from destination ZIP)" }));
+    zsSelect.value = card.zoneSource;
+    zsSelect.addEventListener("change", () => {
+      card.zoneSource = zsSelect.value;
+      if (card.zoneSource === "usps") {
+        const zones = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        card.zones = zones;
+        card.countryZoneMap = {};
+        for (const row of card.brackets) row.prices = Object.fromEntries(zones.map((z) => [z, row.prices[z] || 0]));
+        card.perUnit = Object.fromEntries(zones.map((z) => [z, card.perUnit[z] || { base: 0, rate: 0, min: 0 }]));
+      }
+      taskGState.dest = {};
+      saveFreightRateCardsToStorage(taskGState.rateCards);
+      renderTaskG();
+    });
+    zsWrap.appendChild(zsSelect);
+    cfgGrid.appendChild(zsWrap);
+  }
+
+  const divWrap = h("div", { class: "col-field" });
+  divWrap.appendChild(h("label", { text: "Volumetric divisor (optional)" }));
+  const divInput = h("input", { type: "number", min: "0", step: "1", placeholder: "e.g. 5000 (cm→kg) or 139 (in→lb)" });
+  divInput.value = card.dimDivisor || "";
+  divInput.addEventListener("change", () => { card.dimDivisor = parseFloat(divInput.value) || null; saveFreightRateCardsToStorage(taskGState.rateCards); });
+  divWrap.appendChild(divInput);
+  cfgGrid.appendChild(divWrap);
+
+  root.appendChild(cfgGrid);
+
+  if (card.zoneSource === "manual") {
+    root.appendChild(h("h6", { text: "Destination zones" }));
+    const zoneRow = h("div", { class: "col-grid" });
+    card.zones.forEach((z) => {
+      const chip = h("span", { class: "status-chip", text: `${z} ` });
+      if (card.zones.length > 1) {
+        const x = h("button", { class: "clear-btn", text: "×" });
+        x.addEventListener("click", () => { taskG.removeZone(card, z); saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+        chip.appendChild(x);
+      }
+      zoneRow.appendChild(chip);
+    });
+    root.appendChild(zoneRow);
+
+    const addZoneRow = h("div", { class: "file-row" });
+    const addZoneInput = h("input", { type: "text", placeholder: "New zone name (e.g. EU, Rest of World)" });
+    const addZoneBtn = h("button", { class: "clear-btn", text: "+ Add zone" });
+    addZoneBtn.addEventListener("click", () => {
+      taskG.addZone(card, addZoneInput.value);
+      saveFreightRateCardsToStorage(taskGState.rateCards);
+      renderTaskG();
+    });
+    addZoneRow.appendChild(addZoneInput);
+    addZoneRow.appendChild(addZoneBtn);
+    root.appendChild(addZoneRow);
+
+    root.appendChild(h("h6", { text: "Country → zone mapping (optional — lets the calculator resolve a zone from a destination country)" }));
+    const mapBox = h("div", {});
+    Object.entries(card.countryZoneMap).forEach(([country, zone]) => {
+      const row = h("div", { class: "file-row" });
+      row.appendChild(h("span", { text: `${country} → ${zone}` }));
+      const rm = h("button", { class: "clear-btn", text: "Remove" });
+      rm.addEventListener("click", () => { delete card.countryZoneMap[country]; saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+      row.appendChild(rm);
+      mapBox.appendChild(row);
+    });
+    root.appendChild(mapBox);
+
+    const mapRow = h("div", { class: "file-row" });
+    const countryInput = h("input", { type: "text", placeholder: "Country name" });
+    const zoneSelectForMap = h("select", {});
+    card.zones.forEach((z) => zoneSelectForMap.appendChild(h("option", { value: z, text: z })));
+    const mapBtn = h("button", { class: "clear-btn", text: "+ Add mapping" });
+    mapBtn.addEventListener("click", () => {
+      const country = countryInput.value.trim();
+      if (!country) return;
+      card.countryZoneMap[country] = zoneSelectForMap.value;
+      saveFreightRateCardsToStorage(taskGState.rateCards);
+      renderTaskG();
+    });
+    mapRow.appendChild(countryInput);
+    mapRow.appendChild(zoneSelectForMap);
+    mapRow.appendChild(mapBtn);
+    root.appendChild(mapRow);
+  } else {
+    root.appendChild(h("p", { class: "caption", text:
+      `Zones: ${card.zones.join(", ")} — USPS zone, computed automatically from ${wh.name}'s ZIP and the destination ZIP entered above.` }));
+  }
+
+  root.appendChild(h("h6", { text: "Pricing" }));
+  if (card.mode === "bracket") {
+    const table = h("table", { class: "data-table" });
+    const thead = h("thead", {}, [h("tr", {}, [
+      h("th", { text: `Min (${card.weightUnit})` }),
+      h("th", { text: `Max (${card.weightUnit}, blank = no limit)` }),
+      ...card.zones.map((z) => h("th", { text: z })),
+      h("th", { text: "" }),
+    ])]);
+    const tbody = h("tbody", {});
+    card.brackets.forEach((row, idx) => {
+      const tr = h("tr", {});
+      const minInput = h("input", { type: "number", step: "0.01" });
+      minInput.value = row.min;
+      minInput.addEventListener("change", () => { row.min = parseFloat(minInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+      tr.appendChild(h("td", {}, [minInput]));
+      const maxInput = h("input", { type: "number", step: "0.01" });
+      maxInput.value = row.max == null ? "" : row.max;
+      maxInput.addEventListener("change", () => { row.max = maxInput.value === "" ? null : parseFloat(maxInput.value); saveFreightRateCardsToStorage(taskGState.rateCards); });
+      tr.appendChild(h("td", {}, [maxInput]));
+      card.zones.forEach((z) => {
+        const priceInput = h("input", { type: "number", step: "0.01" });
+        priceInput.value = row.prices[z] == null ? 0 : row.prices[z];
+        priceInput.addEventListener("change", () => { row.prices[z] = parseFloat(priceInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+        tr.appendChild(h("td", {}, [priceInput]));
+      });
+      const rmBtn = h("button", { class: "clear-btn", text: "Remove" });
+      rmBtn.addEventListener("click", () => { taskG.removeBracketRow(card, idx); saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+      tr.appendChild(h("td", {}, [rmBtn]));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    root.appendChild(table);
+    const addRowBtn = h("button", { class: "clear-btn", text: "+ Add weight bracket" });
+    addRowBtn.addEventListener("click", () => { taskG.addBracketRow(card); saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+    root.appendChild(addRowBtn);
+  } else {
+    const table = h("table", { class: "data-table" });
+    const thead = h("thead", {}, [h("tr", {}, [
+      h("th", { text: "Zone" }), h("th", { text: "Base fee" }), h("th", { text: `Rate per ${card.weightUnit}` }), h("th", { text: "Minimum charge" }),
+    ])]);
+    const tbody = h("tbody", {});
+    card.zones.forEach((z) => {
+      if (!card.perUnit[z]) card.perUnit[z] = { base: 0, rate: 0, min: 0 };
+      const cfg = card.perUnit[z];
+      const tr = h("tr", {});
+      tr.appendChild(h("td", { text: z }));
+      const baseInput = h("input", { type: "number", step: "0.01" });
+      baseInput.value = cfg.base;
+      baseInput.addEventListener("change", () => { cfg.base = parseFloat(baseInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+      tr.appendChild(h("td", {}, [baseInput]));
+      const rateInput = h("input", { type: "number", step: "0.01" });
+      rateInput.value = cfg.rate;
+      rateInput.addEventListener("change", () => { cfg.rate = parseFloat(rateInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+      tr.appendChild(h("td", {}, [rateInput]));
+      const minInput = h("input", { type: "number", step: "0.01" });
+      minInput.value = cfg.min;
+      minInput.addEventListener("change", () => { cfg.min = parseFloat(minInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+      tr.appendChild(h("td", {}, [minInput]));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    root.appendChild(table);
+  }
+}
+
+function renderTaskG() {
+  renderTaskGWarehouseSelect();
+  renderTaskGRateCardSelect();
+  renderTaskGDest();
+  renderTaskGRateCardEditor();
+}
+
 function initTabs() {
   document.querySelectorAll(".tab-button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2820,12 +3232,27 @@ function init() {
   ops2InitFileCounts("tab-f", ["f-amazon-file"], []);
   ops2InitEmptyState("tab-f");
 
+  document.getElementById("g-warehouse").addEventListener("change", (e) => {
+    taskGState.warehouseId = e.target.value;
+    taskGState.rateCardId = null;
+    taskGState.dest = {};
+    renderTaskG();
+  });
+  document.getElementById("g-ratecard").addEventListener("change", (e) => {
+    taskGState.rateCardId = e.target.value;
+    taskGState.dest = {};
+    renderTaskG();
+  });
+  document.getElementById("g-weight-kg").addEventListener("input", renderTaskGWeightConverted);
+  document.getElementById("g-calc-btn").addEventListener("click", computeTaskGQuote);
+
   renderTaskA();
   renderTaskB();
   renderTaskC();
   renderTaskD();
   renderTaskE();
   renderTaskF();
+  renderTaskG();
 }
 
 document.addEventListener("DOMContentLoaded", init);

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "im8-ops-tool",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["webapp/static-server.js"],
+      "port": 8734
+    }
+  ]
+}
