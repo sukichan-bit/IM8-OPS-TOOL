@@ -293,6 +293,62 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!!badResult.error, "a sheet with no weight x zone header should error, not throw");
 }
 
+// ---- parseUsDomesticZoneSheet: named zones + multiple named sections in
+// one sheet + a "pretty name" row that introduces no weight data of its
+// own — the shape used by Stord's own multi-service "RATE CARD" sheet
+// (ECONOMY/GROUND STANDARD/etc. sections with named zones like "Hawaii";
+// a "Priority DDP" section whose header stacks a row of full country
+// names directly above a row of 2-letter codes, re-used again by a
+// second oz->lb header block further down the SAME section). ----
+{
+  const fixtureRows = [
+    ["ECONOMY"],
+    ["Weight", "ZONES"],
+    ["Ounces (OZ)", 2, 3, "Hawaii", "Alaska"],
+    [1, 4.28, 4.32, 5.03, 5.03],
+    [],
+    ["GROUND STANDARD COMMERCIAL"],
+    ["Weight (LB)", "ZONES"],
+    [null, 2, 3, "Hawaii", "Alaska"],
+    [1, 10.9, 10.9, 31.2, 32.2],
+    [],
+    ["Priority DDP"],
+    ["Weight", "ZONES"],
+    [null, "Australia", "Belgium"],
+    ["Ounces (OZ)", "AU", "BE"],
+    [1, 112.86, 104.04],
+    [16, 117.16, 108],
+    ["Pounds (LB)", "AU", "BE"], // a second header block, same section, no adjacent name row of its own
+    [5, 199.67, 190],
+  ];
+  const economy = taskG.parseUsDomesticZoneSheet(fixtureRows, { sectionLabel: "ECONOMY" });
+  assert(!economy.error && economy.card.zones.includes("Hawaii") && economy.card.zones.includes("Alaska"),
+    `named zones (Hawaii/Alaska) should be captured, got ${JSON.stringify(economy.card && economy.card.zones)}`);
+  assert(close(economy.card.brackets[0].prices.Hawaii, 5.03), `Hawaii price, got ${economy.card && JSON.stringify(economy.card.brackets[0])}`);
+
+  const groundComm = taskG.parseUsDomesticZoneSheet(fixtureRows, { sectionLabel: "GROUND STANDARD COMMERCIAL" });
+  assert(!groundComm.error && groundComm.card.zones.length === 4, `sectionLabel should isolate just this section's zones, got ${JSON.stringify(groundComm.card && groundComm.card.zones)}`);
+  assert(close(groundComm.card.brackets[0].prices["2"], 10.9), `Ground Standard Commercial zone 2, got ${groundComm.card && JSON.stringify(groundComm.card.brackets[0])}`);
+
+  // The trickiest part: a display-name-only row (no weight data on the
+  // very next line) must apply to EVERY header block in its section, not
+  // just the one immediately below it — Priority DDP's oz block picks up
+  // the country names directly, but the later lb block (a fresh header
+  // with no name row of its own right above it) must inherit them too,
+  // otherwise its prices land under "AU"/"BE" instead of the country name
+  // used everywhere else and silently vanish from the country's own
+  // bracket ladder.
+  const ddp = taskG.parseUsDomesticZoneSheet(fixtureRows, { sectionLabel: "Priority DDP", buildCountryZoneMap: true });
+  assert(!ddp.error, `parse should succeed, got error: ${ddp.error}`);
+  assert(ddp.card.zones.includes("Australia") && !ddp.card.zones.includes("AU"),
+    `zones should be full country names, not codes, got ${JSON.stringify(ddp.card && ddp.card.zones)}`);
+  assert(ddp.card.brackets.length === 3, `2 oz rows + 1 lb row -> 3 brackets, got ${ddp.card.brackets.length}`);
+  const lbBracket = ddp.card.brackets[ddp.card.brackets.length - 1];
+  assert(close(lbBracket.prices.Australia, 199.67), `the later lb header block must inherit the country names too, got ${JSON.stringify(lbBracket)}`);
+  const q = taskG.quoteFreight({ card: ddp.card, totalWeightKg: taskG.convertWeight(5, "lb", "kg"), parcelCount: 1, dest: { country: "Australia" } });
+  assert(!q.error && close(q.perParcelCost, 199.67), `5lb to Australia via the lb block, got ${JSON.stringify(q)}`);
+}
+
 // ---- parseUpsWorldwideExpeditedSheets: UPS's own numeric zone codes,
 // resolved from a destination country via a separate Export Zones sheet
 // (Western vs. Eastern U.S. origin columns) — plus the rate sheet's own
@@ -446,6 +502,42 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   const qIsrael = taskG.quoteFreight({ card: dpd, totalWeightKg: 0.25, parcelCount: 1, dest: { country: "ISRAEL" } });
   assert(!qIsrael.error && close(qIsrael.baseCost, 28.3) && close(qIsrael.percentSurcharge, 0.16), `NL DPD 0.25kg to Israel, got ${JSON.stringify(qIsrael)}`);
   assert(!qIsrael.expired, "the NL rate card has no stated expiry date, so shouldn't be auto-flagged expired");
+}
+
+// ---- Real Stord (USOPS-WH05) rate cards, from "IM8 2026 - STORD
+// 20251218.xlsx" (provided by the user 2026-09-11), "RATE CARD" tab —
+// 9 service cards + the existing blank USPS-zone card, seeded into BOTH
+// defaultRateCards().US_STORD_ATL and .US_STORD_RNO (the sheet doesn't
+// distinguish an origin). ----
+{
+  const defaults = taskG.defaultRateCards();
+  for (const whId of ["US_STORD_ATL", "US_STORD_RNO"]) {
+    const cards = defaults[whId];
+    assert(cards.length === 10, `${whId} should have 10 cards (9 real Stord services + the manual-entry USPS-zone card), got ${cards.length}: ${cards.map((c) => c.name).join(", ")}`);
+    assert(cards.filter((c) => c.name.startsWith("Stord")).every((c) => c.currency === "USD"), `${whId}'s Stord cards should be priced in USD`);
+  }
+
+  const econAtl = defaults.US_STORD_ATL.find((c) => c.name === "Stord Economy");
+  const qEcon = taskG.quoteFreight({ card: econAtl, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zone: "2" } });
+  assert(!qEcon.error && close(qEcon.perParcelCost, 5.31), `Stord Economy 1lb zone 2, got ${JSON.stringify(qEcon)}`);
+  assert(econAtl.zones.includes("Hawaii") && econAtl.zones.includes("APO/FPO"), `Stord Economy should include named zones, got ${JSON.stringify(econAtl.zones)}`);
+
+  const groundCommRno = defaults.US_STORD_RNO.find((c) => c.name === "Stord Ground Standard (Commercial)");
+  const qGround = taskG.quoteFreight({ card: groundCommRno, totalWeightKg: taskG.convertWeight(150, "lb", "kg"), parcelCount: 1, dest: { zone: "8" } });
+  assert(!qGround.error && close(qGround.baseCost, 96.38) && groundCommRno.dimDivisor === 166, `Stord Ground Standard Commercial 150lb zone 8, got ${JSON.stringify(qGround)}`);
+
+  // Both origins are built from the SAME underlying seed data (the sheet
+  // doesn't distinguish Atlanta vs. McCarran) but must still be distinct
+  // card instances with their own ids and warehouseId, not aliases of the
+  // same object (editing one in the UI must not silently edit the other).
+  const econRno = defaults.US_STORD_RNO.find((c) => c.name === "Stord Economy");
+  assert(econAtl.id !== econRno.id && econAtl.warehouseId === "US_STORD_ATL" && econRno.warehouseId === "US_STORD_RNO",
+    `ATL and RNO cards should be independent instances, got atl.id=${econAtl.id} rno.id=${econRno.id}`);
+
+  const ddpAtl = defaults.US_STORD_ATL.find((c) => c.name.includes("Priority DDP"));
+  const qDdp = taskG.quoteFreight({ card: ddpAtl, totalWeightKg: taskG.convertWeight(5, "lb", "kg"), parcelCount: 1, dest: { country: "Australia" } });
+  assert(!qDdp.error && close(qDdp.perParcelCost, 139.49), `Stord Priority DDP 5lb to Australia, got ${JSON.stringify(qDdp)}`);
+  assert(!qDdp.expired, "the Stord rate card has no stated expiry date, so shouldn't be auto-flagged expired");
 }
 
 if (!ok) {
