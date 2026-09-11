@@ -148,6 +148,39 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   // Country -> zone resolution should work directly off the country name (identity map).
   const qNorway = taskG.quoteFreight({ card: dpdIntl, totalWeightKg: 1, parcelCount: 1, dest: { country: "Norway" } });
   assert(!qNorway.error && close(qNorway.perParcelCost, 29.5), `DPD Non-UK Norway 0.51-1kg, got ${JSON.stringify(qNorway)}`);
+
+  // Currency is carried on every card and surfaced on every quote.
+  assert(rm.currency === "GBP" && qLocal.currency === "GBP", `UK cards should be priced in GBP, got card=${rm.currency} quote=${qLocal.currency}`);
+}
+
+// ---- Real US GPS (USOPS-WH04) rate cards, imported from "IM8 2025 GPS
+// US2Global eCom Parcel Rate-Premium v2.xlsx" (provided by the user
+// 2026-09-11) via parseUsToGlobalRateSheet — seeded as the GPS default
+// despite being expired, per explicit instruction ("use this expired
+// rate card to proceed first"). ----
+{
+  const ddp = taskG.gpsDdpCard();
+  const ddu = taskG.gpsDduCard();
+  assert(ddp.currency === "USD" && ddu.currency === "USD", `GPS cards should be priced in USD, got ddp=${ddp.currency} ddu=${ddu.currency}`);
+  assert(ddp.zones.length === 41 && ddu.zones.length === 231, `GPS DDP/DDU zone counts, got ddp=${ddp.zones.length} ddu=${ddu.zones.length}`);
+  assert(ddp.zones.includes("Canada") && ddu.zones.includes("Canada"), "both GPS cards should include Canada as a destination");
+
+  // 0.5lb to Canada should hit the first bracket on both cards.
+  const halfLbInKg = taskG.convertWeight(0.5, "lb", "kg");
+  const qDdp = taskG.quoteFreight({ card: ddp, totalWeightKg: halfLbInKg, parcelCount: 1, dest: { country: "Canada" } });
+  assert(!qDdp.error && close(qDdp.perParcelCost, 8.3) && qDdp.currency === "USD", `GPS DDP Canada 0.5lb, got ${JSON.stringify(qDdp)}`);
+  const qDdu = taskG.quoteFreight({ card: ddu, totalWeightKg: halfLbInKg, parcelCount: 1, dest: { country: "Canada" } });
+  assert(!qDdu.error && close(qDdu.perParcelCost, 11.07), `GPS DDU Canada 0.5lb, got ${JSON.stringify(qDdu)}`);
+
+  // Both cards are past their expiry (2025-09-30) as of any date this test
+  // suite realistically runs on — every quote must say so.
+  assert(qDdp.expired === true && qDdu.expired === true, "GPS cards are expired (2025-09-30) and every quote should be flagged as such");
+
+  // defaultRateCards() should wire these in directly for US_GPS (not a
+  // blank starter card) — this is what makes the warehouse usable out of
+  // the box despite no fresh rate card being available yet.
+  const defaults = taskG.defaultRateCards();
+  assert(defaults.US_GPS.length === 2 && defaults.US_GPS.every((c) => c.currency === "USD"), `US_GPS defaults should be the two real GPS cards, got ${JSON.stringify(defaults.US_GPS.map((c) => c.name))}`);
 }
 
 // ---- parseUsToGlobalRateSheet: GPS-style "Destinations x weight-break"

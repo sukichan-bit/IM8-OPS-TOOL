@@ -2903,15 +2903,17 @@ function computeTaskGQuote() {
     return;
   }
 
+  const fmtMoney = (amount) => `${amount.toFixed(2)}${quote.currency ? " " + quote.currency : ""}`;
+
   if (quote.expired) {
     resultBox.appendChild(h("p", { class: "warning", text: `⚠ This rate card expired on ${quote.expiryDate} — confirm current pricing before quoting a customer.` }));
   }
   resultBox.appendChild(h("p", { class: "info", text:
     `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
-  const surchargeNote = quote.flatSurcharge ? ` (rate ${quote.baseCost.toFixed(2)} + flat surcharge ${quote.flatSurcharge.toFixed(2)})` : "";
+  const surchargeNote = quote.flatSurcharge ? ` (rate ${fmtMoney(quote.baseCost)} + flat surcharge ${fmtMoney(quote.flatSurcharge)})` : "";
   resultBox.appendChild(h("p", { class: "info", text:
-    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${quote.perParcelCost.toFixed(2)}${surchargeNote}` }));
-  const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${quote.totalCost.toFixed(2)}` });
+    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${fmtMoney(quote.perParcelCost)}${surchargeNote}` }));
+  const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${fmtMoney(quote.totalCost)}` });
   totalP.style.fontSize = "1.25rem";
   totalP.style.fontWeight = "800";
   resultBox.appendChild(totalP);
@@ -3025,6 +3027,14 @@ function renderTaskGRateCardEditor() {
   wuSelect.addEventListener("change", () => { card.weightUnit = wuSelect.value; saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
   wuWrap.appendChild(wuSelect);
   cfgGrid.appendChild(wuWrap);
+
+  const curWrap = h("div", { class: "col-field" });
+  curWrap.appendChild(h("label", { text: "Currency" }));
+  const curInput = h("input", { type: "text", placeholder: "e.g. USD, GBP" });
+  curInput.value = card.currency || "";
+  curInput.addEventListener("change", () => { card.currency = curInput.value.trim().toUpperCase(); saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+  curWrap.appendChild(curInput);
+  cfgGrid.appendChild(curWrap);
 
   if (wh.uspsOriginZip3) {
     const zsWrap = h("div", { class: "col-field" });
