@@ -4532,6 +4532,13 @@ function emptyManualCard(warehouseId, name, weightUnit, dimUnit) {
     dimDivisor: null,
     brackets: [{ min: 0, max: null, prices: { All: 0 } }],
     perUnit: { All: { base: 0, rate: 0, min: 0 } },
+    // A flat fee added to every parcel on top of the bracket/perUnit price —
+    // for carrier surcharges that apply to every package regardless of zone
+    // or weight (e.g. Royal Mail's "Green Surcharge" + "Peak Season
+    // Surcharge" — see UK rate card notes below). Zone- or weight-specific
+    // surcharges belong baked into the bracket/perUnit price itself instead
+    // (see notes); this is only for the always-on, zone-independent ones.
+    flatSurcharge: 0,
     notes: "",
   };
 }
@@ -4552,19 +4559,104 @@ function emptyUspsCard(warehouseId, name, weightUnit, dimUnit) {
     dimDivisor: null,
     brackets: [{ min: 0, max: 1, prices: { ...zeros } }],
     perUnit: Object.fromEntries(zones.map((z) => [z, { base: 0, rate: 0, min: 0 }])),
+    flatSurcharge: 0,
     notes: "",
   };
 }
 
-// Seed: one starter rate card per warehouse, blank prices for the user to
-// fill in (real numbers are the user's own commercial data — this tool
-// never guesses at a $ figure). Stord's cards start pre-wired for USPS
-// zone-based pricing since that structure is fixed; the rest start as a
-// single manual "All" zone the user can rename/split into countries.
+// ---------- UK (OPS-WH02) — real rate cards ----------
+// Source: "RS UK eFulfillment Rate_VIP4.1_IM8_2026.4.1.xlsx" (provided by
+// the user 2026-09-11), Royal Mail-UK / DPD- UK / DPD-Non-UK tabs. Only
+// Royal Mail and DPD are active services for this warehouse (Evri/Yodel
+// tabs exist in the file but are not in use, so not seeded here).
+//
+// Each card folds in the surcharges that always apply for a given zone (so
+// the price is a realistic all-in estimate), and leaves genuinely
+// conditional/exceptional surcharges (oversize, return/redelivery,
+// customs duty, London Congestion Fee, etc.) out of the price — those are
+// listed in `notes` instead of guessed at:
+//   - Royal Mail: "Remote Area Surcharge" (Area 2 +£2.50, Area 3 +£2.00) is
+//     baked into the Area 2/3 bracket prices — it's not conditional, it IS
+//     what defines those zones as remote. "Green Surcharge" (£0.05) and
+//     "Peak Season Surcharge" (£0.12) apply to every package regardless of
+//     zone, so they're the flatSurcharge (£0.17 total).
+//   - DPD (UK): "Northern Ireland Clearance Surcharge" (£0.60) applies to
+//     every Zone 4 package, baked into that zone's price. Fuel surcharge
+//     is £0, so flatSurcharge is £0.
+//   - DPD (Non-UK): rates already fuel-inclusive; no flat/zone surcharge
+//     to fold in from this sheet.
+function ukRoyalMailCard() {
+  const card = emptyManualCard("UK", "Royal Mail (UK domestic)", "kg", "cm");
+  card.zones = ["Area 1", "Area 2", "Area 3"];
+  card.brackets = [
+    { min: 0, max: 2, prices: { "Area 1": 2.3, "Area 2": 7.3, "Area 3": 6.3 } },
+    { min: 2.01, max: 5, prices: { "Area 1": 3.1, "Area 2": 8.1, "Area 3": 7.1 } },
+    { min: 5.01, max: 10, prices: { "Area 1": 3.6, "Area 2": 8.6, "Area 3": 7.6 } },
+    { min: 10.01, max: 15, prices: { "Area 1": 4.15, "Area 2": 9.15, "Area 3": 8.15 } },
+    { min: 15.01, max: 20, prices: { "Area 1": 4.75, "Area 2": 9.75, "Area 3": 8.75 } },
+  ];
+  card.flatSurcharge = 0.17; // Green Surcharge £0.05 + Peak Season Surcharge £0.12, every package
+  card.notes =
+    "RM Tracked Parcel_48H (RM_TR48). Area 1 = rest of UK. Area 2 (postcodes IV, HS, KA27-28, KW, PA20-49, " +
+    "PA60-78, PA80, PH17-26, PH30-44, PH49-50, ZE, FK20, GY, JE, IM) and Area 3 (BT, TR21-25, AB35-38, AB53-56, " +
+    "FK18-19, PO30-41) prices already include the Remote Area Surcharge (Area 2 +£2.50 / Area 3 +£2.00). Max " +
+    "weight 20kg; dims must be under 61x46x46cm or Oversize Surcharge (£20) applies — not included here. Other " +
+    "surcharges not included (quote separately if applicable): Return Shipping Fee (= outbound rate), Redelivery " +
+    "Fee (£2.30), BFPO not serviceable.";
+  return card;
+}
+
+function ukDpdUkCard() {
+  const card = emptyManualCard("UK", "DPD (UK domestic)", "kg", "cm");
+  card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
+  card.brackets = [
+    { min: 0, max: 30, prices: { "Zone 1": 6.45, "Zone 2": 21, "Zone 3": 18, "Zone 4": 13.6, "Zone 5": 33.5 } },
+  ];
+  card.flatSurcharge = 0;
+  card.notes =
+    "DPD parcel (DPDUKN / DPDUK2). Zone 1 = Mainland. Zone 2 = Channel Isles (GY, JE). Zone 3 = Scottish " +
+    "Highlands/Islands + Isle of Man (AB36-38, FK17-21, IV1-56, IV63, KA27-28, KW1-17, PA20-49, PA60-80, " +
+    "PH19-26, PH30-44, PH49-50, HS1-9, ZE1-3, IM1-9). Zone 4 = Northern Ireland (BT1-99) — price already " +
+    "includes the Northern Ireland Clearance Surcharge (£0.60/order). Zone 5 = Isles of Scilly (TR21-25). Max " +
+    "30kg, 100x70x60cm, girth <230cm or Oversize Surcharge (£24) applies — not included here. Customs duty " +
+    "(Zone 2 / Isle of Man) charged at cost, not included. London Congestion Fee (£1.50, specific London " +
+    "postcodes within Zone 1) not included.";
+  return card;
+}
+
+function ukDpdNonUkCard() {
+  const card = emptyManualCard("UK", "DPD (Non-UK: UAE / Israel / Saudi / Norway)", "kg", "cm");
+  card.zones = ["UAE", "Israel", "Saudi Arabia", "Norway"];
+  card.countryZoneMap = { UAE: "UAE", Israel: "Israel", "Saudi Arabia": "Saudi Arabia", Norway: "Norway" };
+  card.brackets = [
+    { min: 0, max: 0.5, prices: { UAE: 12.5, Israel: 20.7, "Saudi Arabia": 18.55, Norway: 25.95 } },
+    { min: 0.51, max: 1, prices: { UAE: 15.5, Israel: 25, "Saudi Arabia": 22.5, Norway: 29.5 } },
+    { min: 1.01, max: 1.5, prices: { UAE: 17.95, Israel: 29.2, "Saudi Arabia": 25.65, Norway: 33.5 } },
+    { min: 1.51, max: 2, prices: { UAE: 19.73, Israel: 33.45, "Saudi Arabia": 29.8, Norway: 36.5 } },
+    { min: 2.01, max: 2.5, prices: { UAE: 22.92, Israel: 37.71, "Saudi Arabia": 34.5, Norway: 39.95 } },
+    { min: 2.51, max: 3, prices: { UAE: 26.1, Israel: 41.95, "Saudi Arabia": 39, Norway: 43.5 } },
+    { min: 3.01, max: 5, prices: { UAE: 38.84, Israel: 58.95, "Saudi Arabia": 55.65, Norway: 58.2 } },
+    { min: 5.01, max: 10, prices: { UAE: 67.5, Israel: 138.5, "Saudi Arabia": 118.95, Norway: 99.89 } },
+  ];
+  card.flatSurcharge = 0;
+  card.notes =
+    "Max weight 10kg, max length 100cm, L+H+W < 120cm. Israel service is suspended at the moment (per rate " +
+    "card notes) — confirm before quoting. Rates exclude UK VAT. DDP admin fee/duties charged at cost, not " +
+    "included.";
+  return card;
+}
+
+// Seed: one starter rate card per warehouse. UK (OPS-WH02) ships with the
+// warehouse's real, current Royal Mail + DPD cards (see above) since we
+// have them; the rest start blank for the user to fill in (real numbers
+// are the user's own commercial data — this tool never guesses at a $
+// figure). Stord's cards start pre-wired for USPS zone-based pricing
+// since that structure is fixed; HK/NL/US GPS start as a single manual
+// "All" zone the user can rename/split into countries.
 function defaultRateCards() {
   return {
     HK: [emptyManualCard("HK", "HK rate card", "kg", "cm")],
-    UK: [emptyManualCard("UK", "UK rate card", "kg", "cm")],
+    UK: [ukRoyalMailCard(), ukDpdUkCard(), ukDpdNonUkCard()],
     NL: [emptyManualCard("NL", "NL rate card", "kg", "cm")],
     US_GPS: [emptyManualCard("US_GPS", "US GPS rate card", "lb", "in")],
     US_STORD_ATL: [emptyUspsCard("US_STORD_ATL", "Stord ATL — USPS zone rate card", "lb", "in")],
@@ -4665,12 +4757,16 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
   const perParcelWeight = computeChargeableWeightPerParcel({ totalWeightKg, parcelCount: count, dims, card });
   const priceResult = priceForZone(card, zoneResult.zone, perParcelWeight);
   if (priceResult.error) return priceResult;
+  const flatSurcharge = Number(card.flatSurcharge) || 0;
+  const perParcelCost = priceResult.price + flatSurcharge;
   return {
     parcelCount: count,
     perParcelWeight,
     weightUnit: card.weightUnit,
-    perParcelCost: priceResult.price,
-    totalCost: priceResult.price * count,
+    baseCost: priceResult.price,
+    flatSurcharge,
+    perParcelCost,
+    totalCost: perParcelCost * count,
     zone: zoneResult.zone,
     zoneRaw: zoneResult.raw || zoneResult.zone,
   };
@@ -4683,7 +4779,7 @@ if (typeof window !== "undefined") {
     convertWeight, convertLength, volumetricWeight,
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
-    emptyManualCard, emptyUspsCard, defaultRateCards,
+    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, defaultRateCards,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
   };
@@ -4695,7 +4791,7 @@ if (typeof module !== "undefined") {
     convertWeight, convertLength, volumetricWeight,
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
-    emptyManualCard, emptyUspsCard, defaultRateCards,
+    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, defaultRateCards,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
   };
@@ -7709,12 +7805,14 @@ function computeTaskGQuote() {
 
   resultBox.appendChild(h("p", { class: "info", text:
     `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
+  const surchargeNote = quote.flatSurcharge ? ` (rate ${quote.baseCost.toFixed(2)} + flat surcharge ${quote.flatSurcharge.toFixed(2)})` : "";
   resultBox.appendChild(h("p", { class: "info", text:
-    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${quote.perParcelCost.toFixed(2)}` }));
+    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${quote.perParcelCost.toFixed(2)}${surchargeNote}` }));
   const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${quote.totalCost.toFixed(2)}` });
   totalP.style.fontSize = "1.25rem";
   totalP.style.fontWeight = "800";
   resultBox.appendChild(totalP);
+  if (card.notes) resultBox.appendChild(h("p", { class: "caption", text: `Rate card notes: ${card.notes}` }));
 }
 
 function renderTaskGRateCardEditor() {
@@ -7826,7 +7924,23 @@ function renderTaskGRateCardEditor() {
   divWrap.appendChild(divInput);
   cfgGrid.appendChild(divWrap);
 
+  const surWrap = h("div", { class: "col-field" });
+  surWrap.appendChild(h("label", { text: "Flat surcharge per parcel (optional)" }));
+  const surInput = h("input", { type: "number", min: "0", step: "0.01", placeholder: "e.g. fuel/peak-season fees that apply to every package" });
+  surInput.value = card.flatSurcharge || "";
+  surInput.addEventListener("change", () => { card.flatSurcharge = parseFloat(surInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+  surWrap.appendChild(surInput);
+  cfgGrid.appendChild(surWrap);
+
   root.appendChild(cfgGrid);
+
+  const notesWrap = h("div", { class: "col-field" });
+  notesWrap.appendChild(h("label", { text: "Notes (zone definitions, surcharges not included above, service restrictions, etc.)" }));
+  const notesInput = h("textarea", { rows: "3", style: "width:100%;font:inherit;" });
+  notesInput.value = card.notes || "";
+  notesInput.addEventListener("change", () => { card.notes = notesInput.value; saveFreightRateCardsToStorage(taskGState.rateCards); });
+  notesWrap.appendChild(notesInput);
+  root.appendChild(notesWrap);
 
   if (card.zoneSource === "manual") {
     root.appendChild(h("h6", { text: "Destination zones" }));

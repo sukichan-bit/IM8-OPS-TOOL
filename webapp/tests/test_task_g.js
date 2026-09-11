@@ -118,6 +118,38 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qFar.error && qFar.zone === "8" && close(qFar.perParcelCost, 16), `Stord ATL far zone 8, got ${JSON.stringify(qFar)}`);
 }
 
+// ---- flatSurcharge (e.g. always-on fuel/peak-season fees) ----
+{
+  const card = taskG.emptyManualCard("UK", "flat surcharge test card", "kg", "cm");
+  card.brackets = [{ min: 0, max: 5, prices: { All: 10 } }];
+  card.flatSurcharge = 0.17;
+  const q = taskG.quoteFreight({ card, totalWeightKg: 2, parcelCount: 3, dest: { zone: "All" } });
+  assert(!q.error && close(q.baseCost, 10) && close(q.flatSurcharge, 0.17) && close(q.perParcelCost, 10.17) && close(q.totalCost, 30.51),
+    `flatSurcharge should add per parcel, got ${JSON.stringify(q)}`);
+}
+
+// ---- Real UK (OPS-WH02) rate cards seeded from the Royal Mail / DPD rate
+// card (RS UK eFulfillment Rate_VIP4.1_IM8_2026.4.1.xlsx, 2026-09-11) ----
+{
+  const rm = taskG.ukRoyalMailCard();
+  // 1.5kg to a mainland (Area 1) address: base 2.30 + flat surcharge 0.17.
+  const qLocal = taskG.quoteFreight({ card: rm, totalWeightKg: 1.5, parcelCount: 1, dest: { zone: "Area 1" } });
+  assert(!qLocal.error && close(qLocal.perParcelCost, 2.47), `Royal Mail Area 1 0-2kg, got ${JSON.stringify(qLocal)}`);
+  // 3kg to Area 3 (remote-area surcharge already folded into the bracket price): 7.10 + 0.17.
+  const qRemote = taskG.quoteFreight({ card: rm, totalWeightKg: 3, parcelCount: 1, dest: { zone: "Area 3" } });
+  assert(!qRemote.error && close(qRemote.perParcelCost, 7.27), `Royal Mail Area 3 2.01-5kg, got ${JSON.stringify(qRemote)}`);
+
+  const dpdUk = taskG.ukDpdUkCard();
+  // Northern Ireland (Zone 4) price already includes the NI Clearance Surcharge.
+  const qNi = taskG.quoteFreight({ card: dpdUk, totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone 4" } });
+  assert(!qNi.error && close(qNi.perParcelCost, 13.6), `DPD UK Zone 4 (Northern Ireland), got ${JSON.stringify(qNi)}`);
+
+  const dpdIntl = taskG.ukDpdNonUkCard();
+  // Country -> zone resolution should work directly off the country name (identity map).
+  const qNorway = taskG.quoteFreight({ card: dpdIntl, totalWeightKg: 1, parcelCount: 1, dest: { country: "Norway" } });
+  assert(!qNorway.error && close(qNorway.perParcelCost, 29.5), `DPD Non-UK Norway 0.51-1kg, got ${JSON.stringify(qNorway)}`);
+}
+
 if (!ok) {
   console.error("\nTASK G TEST FAILED");
   process.exit(1);

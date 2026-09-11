@@ -2858,12 +2858,14 @@ function computeTaskGQuote() {
 
   resultBox.appendChild(h("p", { class: "info", text:
     `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
+  const surchargeNote = quote.flatSurcharge ? ` (rate ${quote.baseCost.toFixed(2)} + flat surcharge ${quote.flatSurcharge.toFixed(2)})` : "";
   resultBox.appendChild(h("p", { class: "info", text:
-    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${quote.perParcelCost.toFixed(2)}` }));
+    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${quote.perParcelCost.toFixed(2)}${surchargeNote}` }));
   const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${quote.totalCost.toFixed(2)}` });
   totalP.style.fontSize = "1.25rem";
   totalP.style.fontWeight = "800";
   resultBox.appendChild(totalP);
+  if (card.notes) resultBox.appendChild(h("p", { class: "caption", text: `Rate card notes: ${card.notes}` }));
 }
 
 function renderTaskGRateCardEditor() {
@@ -2975,7 +2977,23 @@ function renderTaskGRateCardEditor() {
   divWrap.appendChild(divInput);
   cfgGrid.appendChild(divWrap);
 
+  const surWrap = h("div", { class: "col-field" });
+  surWrap.appendChild(h("label", { text: "Flat surcharge per parcel (optional)" }));
+  const surInput = h("input", { type: "number", min: "0", step: "0.01", placeholder: "e.g. fuel/peak-season fees that apply to every package" });
+  surInput.value = card.flatSurcharge || "";
+  surInput.addEventListener("change", () => { card.flatSurcharge = parseFloat(surInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+  surWrap.appendChild(surInput);
+  cfgGrid.appendChild(surWrap);
+
   root.appendChild(cfgGrid);
+
+  const notesWrap = h("div", { class: "col-field" });
+  notesWrap.appendChild(h("label", { text: "Notes (zone definitions, surcharges not included above, service restrictions, etc.)" }));
+  const notesInput = h("textarea", { rows: "3", style: "width:100%;font:inherit;" });
+  notesInput.value = card.notes || "";
+  notesInput.addEventListener("change", () => { card.notes = notesInput.value; saveFreightRateCardsToStorage(taskGState.rateCards); });
+  notesWrap.appendChild(notesInput);
+  root.appendChild(notesWrap);
 
   if (card.zoneSource === "manual") {
     root.appendChild(h("h6", { text: "Destination zones" }));
