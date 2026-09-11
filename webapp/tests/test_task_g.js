@@ -178,9 +178,11 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
 
   // defaultRateCards() should wire these in directly for US_GPS (not a
   // blank starter card) — this is what makes the warehouse usable out of
-  // the box despite no fresh rate card being available yet.
+  // the box despite no fresh rate card being available yet. (The other 6
+  // GPS cards — local + international — are checked further down.)
   const defaults = taskG.defaultRateCards();
-  assert(defaults.US_GPS.length === 2 && defaults.US_GPS.every((c) => c.currency === "USD"), `US_GPS defaults should be the two real GPS cards, got ${JSON.stringify(defaults.US_GPS.map((c) => c.name))}`);
+  const ddpDdu = defaults.US_GPS.filter((c) => c.name.includes("US to Global"));
+  assert(ddpDdu.length === 2 && ddpDdu.every((c) => c.currency === "USD"), `US_GPS defaults should include the two DDP/DDU cards, got ${JSON.stringify(defaults.US_GPS.map((c) => c.name))}`);
 }
 
 // ---- parseUsToGlobalRateSheet: GPS-style "Destinations x weight-break"
@@ -245,6 +247,117 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   // Missing the "Destinations" row entirely -> a clear error, not a throw.
   const badResult = taskG.parseUsToGlobalRateSheet([["not a rate sheet"]], {});
   assert(!!badResult.error, "a sheet with no Destinations row should error, not throw or silently return garbage");
+}
+
+// ---- parseUsDomesticZoneSheet: "Zone N" (or bare zone-number) columns x
+// lb/oz weight rows — the shape used by GPS's own USPS/UPS Ground/FedEx
+// Ground domestic sheets. Fixture mirrors USPS Ground Advantage's real
+// shape: an oz-indexed block (<1lb) followed by an lb-indexed block
+// reusing the same zone columns, both stitched into one bracket ladder. ----
+{
+  const fixtureRows = [
+    [],
+    ["USPS Ground Advantage Package Service"],
+    ["Rate Category (oz.)", "ZONE 1", "ZONE 2"],
+    [1, 3.67, 3.7],
+    [2, 3.67, 3.7],
+    ["Rate Category（lb）", "ZONE 1", "ZONE 2"],
+    [1, 5.96, 5.98],
+    [2, 6.2, 6.23],
+    ["Oversized", 93.05, 103.15],
+  ];
+  const { card, error } = taskG.parseUsDomesticZoneSheet(fixtureRows, { warehouseId: "US_GPS", cardName: "USPS GA test", dimDivisor: 166 });
+  assert(!error, `parse should succeed on a well-formed sheet, got error: ${error}`);
+  assert(card.zones.length === 2 && card.zones[0] === "1" && card.zones[1] === "2", `zones from ZONE header columns, got ${JSON.stringify(card && card.zones)}`);
+  assert(card.dimDivisor === 166, `dimDivisor passed through from opts, got ${card.dimDivisor}`);
+  // oz block: 2 rows -> brackets at 1/16=0.0625lb and 2/16=0.125lb.
+  assert(card.brackets.length === 4, `2 oz rows + 2 lb rows -> 4 brackets ("Oversized" should not add a 5th), got ${card.brackets.length}`);
+  assert(close(card.brackets[0].min, 0) && close(card.brackets[0].max, 0.0625) && close(card.brackets[0].prices["1"], 3.67), `first (1oz) bracket, got ${JSON.stringify(card.brackets[0])}`);
+  assert(close(card.brackets[1].max, 0.125), `second (2oz) bracket max, got ${card.brackets[1].max}`);
+  // lb block continues right after the oz block, in the same ladder.
+  assert(close(card.brackets[2].max, 1) && close(card.brackets[2].prices["1"], 5.96), `third (1lb) bracket, got ${JSON.stringify(card.brackets[2])}`);
+  assert(close(card.brackets[3].max, 2) && close(card.brackets[3].prices["2"], 6.23), `fourth (2lb) bracket, got ${JSON.stringify(card.brackets[3])}`);
+
+  // A Commercial | Residential side-by-side layout (real UPS Ground shape)
+  // should only pick up the first (Commercial) block, stopping at the gap.
+  const sideBySideRows = [
+    ["Lbs.", "Zone 2", "Zone 3", null, "Lbs.", "Zone 2", "Zone 3"],
+    [1, 7.23, 7.23, null, 1, 7.13, 7.13],
+    [2, 7.23, 7.23, null, 2, 7.13, 7.13],
+  ];
+  const sbs = taskG.parseUsDomesticZoneSheet(sideBySideRows, {});
+  assert(!sbs.error && sbs.card.zones.length === 2, `should stop at the gap column (Commercial only), got zones=${JSON.stringify(sbs.card && sbs.card.zones)}`);
+
+  // Missing header row -> a clear error.
+  const badResult = taskG.parseUsDomesticZoneSheet([["nothing here"]], {});
+  assert(!!badResult.error, "a sheet with no weight x zone header should error, not throw");
+}
+
+// ---- parseUpsWorldwideExpeditedSheets: UPS's own numeric zone codes,
+// resolved from a destination country via a separate Export Zones sheet
+// (Western vs. Eastern U.S. origin columns) — plus the rate sheet's own
+// "Destination" row for a few countries (e.g. Canada) called out directly
+// under specific zone columns rather than via the country lookup. ----
+{
+  const rateRows = [
+    ["Zones", null, null, "71", "72", "601"],
+    ["Destination", null, null, "Canada", "Canada", " "],
+    ["Cntr", "Rate Type", "lbs", " ", " ", " "],
+    ["Pkg", "Per Shp", "1", 15.69, 16.77, 18.14],
+    ["Pkg", "Per Shp", "2", 16.58, 18.56, 20.8],
+    ["Pkg", "Per Lb", "9999999", 0.99, 1, 1.51],
+  ];
+  const exportZonesRows = [
+    ["Destination", "UPS Worldwide", "UPS Worldwide"],
+    ["Country", "ExpeditedSM", "ExpeditedSM"],
+    [null, "Originating from", "Originating from"],
+    [null, "Western U.S.", "Eastern U.S."],
+    [],
+    ["United Kingdom / GB", 601, 601],
+    ["Japan / JP", 613, 613],
+  ];
+  const { card, error } = taskG.parseUpsWorldwideExpeditedSheets(rateRows, exportZonesRows, { warehouseId: "US_GPS", cardName: "UPS Intl test" });
+  assert(!error, `parse should succeed, got error: ${error}`);
+  assert(card.zones.length === 3 && card.zones.includes("601"), `zone codes from the Zones header row, got ${JSON.stringify(card && card.zones)}`);
+  assert(card.countryZoneMap["United Kingdom"] === "601", `country -> zone from Export Zones (name stripped of " / GB"), got ${JSON.stringify(card.countryZoneMap)}`);
+  assert(card.countryZoneMap.Canada === "71", `Canada should resolve from the rate sheet's own Destination row (first zone column it appears under), got ${card.countryZoneMap.Canada}`);
+  assert(!("Japan" in card.countryZoneMap) === false, "Japan should be in the map too"); // sanity: map isn't accidentally limited to 1 entry
+  // Weights beyond the flat table ("Per Lb" row) aren't modeled as a bracket.
+  assert(card.brackets.length === 2, `"Per Lb" row should stop the bracket ladder, not become a 3rd bracket, got ${card.brackets.length}`);
+  assert(/per\s*lb/i.test(card.notes) || /additional lb/i.test(card.notes), `notes should mention the unmodeled Per Lb tier, got "${card.notes}"`);
+
+  const q = taskG.quoteFreight({ card, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "United Kingdom" } });
+  assert(!q.error && close(q.perParcelCost, 18.14), `UK 1lb via country lookup, got ${JSON.stringify(q)}`);
+  const qCanada = taskG.quoteFreight({ card, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "Canada" } });
+  assert(!qCanada.error && close(qCanada.perParcelCost, 15.69), `Canada 1lb via Destination-row lookup, got ${JSON.stringify(qCanada)}`);
+
+  // Missing "Zones" header -> a clear error.
+  const badResult = taskG.parseUpsWorldwideExpeditedSheets([["nothing here"]], exportZonesRows, {});
+  assert(!!badResult.error, "a rate sheet with no Zones header should error, not throw");
+}
+
+// ---- Real US GPS (USOPS-WH04) local + international rate cards, from
+// "2025 GPS eFulfillment Rate A1.2.xlsx" and "250707 GPS UPS International
+// Rates v1.xlsx" (provided by the user 2026-09-11), seeded into
+// defaultRateCards().US_GPS alongside the earlier DDP/DDU cards. ----
+{
+  const defaults = taskG.defaultRateCards();
+  const gps = defaults.US_GPS;
+  assert(gps.length === 8, `US_GPS should have 8 default cards (2 US2Global + 5 domestic + 1 UPS intl), got ${gps.length}: ${gps.map((c) => c.name).join(", ")}`);
+  assert(gps.every((c) => c.currency === "USD"), "every GPS card should be priced in USD");
+
+  const ga = gps.find((c) => c.name.includes("Ground Advantage"));
+  const qGa = taskG.quoteFreight({ card: ga, totalWeightKg: taskG.convertWeight(0.5, "lb", "kg"), parcelCount: 1, dest: { zone: "1" } });
+  assert(!qGa.error && close(qGa.perParcelCost, 3.67), `USPS Ground Advantage 0.5lb zone 1, got ${JSON.stringify(qGa)}`);
+
+  const upsGround = gps.find((c) => c.name === "GPS UPS Ground");
+  const qUps = taskG.quoteFreight({ card: upsGround, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zone: "2" } });
+  assert(!qUps.error && close(qUps.perParcelCost, 7.23) && upsGround.dimDivisor === 225, `UPS Ground 1lb zone 2, got ${JSON.stringify(qUps)}`);
+
+  const upsIntl = gps.find((c) => c.name.includes("Worldwide Expedited"));
+  const qJapan = taskG.quoteFreight({ card: upsIntl, totalWeightKg: taskG.convertWeight(2, "lb", "kg"), parcelCount: 1, dest: { country: "Japan" } });
+  assert(!qJapan.error && close(qJapan.perParcelCost, 19.83), `UPS Worldwide Expedited 2lb to Japan, got ${JSON.stringify(qJapan)}`);
+  assert(!qJapan.expired, "GPS local/international cards have no stated expiry date, so shouldn't be auto-flagged expired");
 }
 
 if (!ok) {

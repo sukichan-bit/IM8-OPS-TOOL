@@ -2749,7 +2749,7 @@ function taskGCurrentCard() {
 // loaded workbook itself never gets persisted (only the parsed card does),
 // so this lives outside taskGState/localStorage and resets once an import
 // succeeds or a different file is chosen.
-const taskGImportState = { wb: null, sheets: [], sheetName: null, fileName: "" };
+const taskGImportState = { wb: null, sheets: [], sheetName: null, fileName: "", format: "us2global", dimDivisor: null };
 
 async function handleTaskGImportFile(file) {
   if (!file) {
@@ -2775,12 +2775,15 @@ function runTaskGImport() {
   const resultBox = document.getElementById("g-import-result");
   const wh = taskG.getWarehouse(taskGState.warehouseId);
   const rawRows = io.sheetToRawRows(taskGImportState.wb, taskGImportState.sheetName, null);
-  const { card, error } = taskG.parseUsToGlobalRateSheet(rawRows, {
-    warehouseId: taskGState.warehouseId,
-    weightUnit: wh.weightUnit,
-    dimUnit: wh.dimUnit,
-    cardName: `${taskGImportState.sheetName} (imported ${todayStamp()})`,
-  });
+  const cardName = `${taskGImportState.sheetName} (imported ${todayStamp()})`;
+  const result = taskGImportState.format === "usDomesticZone"
+    ? taskG.parseUsDomesticZoneSheet(rawRows, {
+        warehouseId: taskGState.warehouseId, cardName, dimDivisor: taskGImportState.dimDivisor || null,
+      })
+    : taskG.parseUsToGlobalRateSheet(rawRows, {
+        warehouseId: taskGState.warehouseId, weightUnit: wh.weightUnit, dimUnit: wh.dimUnit, cardName,
+      });
+  const { card, error } = result;
   if (error) {
     if (resultBox) resultBox.replaceChildren(h("p", { class: "error", text: error }));
     return;
@@ -2951,7 +2954,25 @@ function renderTaskGRateCardEditor() {
   root.appendChild(h("hr", { class: "ops2-hr" }));
   root.appendChild(h("h6", { text: "Import a rate card from a file" }));
   root.appendChild(h("p", { class: "caption", text:
-    "For tables too large to type by hand (e.g. a \"Destinations\" row of countries × dozens of weight-break rows, like GPS's US-to-Global parcel rate): upload the file, pick the right tab, and import it as a new rate card." }));
+    "For tables too large to type by hand — a \"Destinations\" row of countries × weight-break rows (e.g. GPS's US-to-Global parcel rate), or a \"Zone N\" columns × lb/oz weight rows domestic sheet (e.g. GPS's USPS/UPS Ground/FedEx Ground cards). Upload the file, pick the format and tab, and import it as a new rate card." }));
+  const formatWrap = h("div", { class: "col-field" });
+  formatWrap.appendChild(h("label", { text: "Sheet format" }));
+  const formatSelect = h("select", {});
+  formatSelect.appendChild(h("option", { value: "us2global", text: "\"Destinations\" row of countries × weight-break rows" }));
+  formatSelect.appendChild(h("option", { value: "usDomesticZone", text: "\"Zone N\" columns × lb/oz weight rows" }));
+  formatSelect.value = taskGImportState.format;
+  formatSelect.addEventListener("change", () => { taskGImportState.format = formatSelect.value; renderTaskG(); });
+  formatWrap.appendChild(formatSelect);
+  root.appendChild(formatWrap);
+  if (taskGImportState.format === "usDomesticZone") {
+    const divWrap = h("div", { class: "col-field" });
+    divWrap.appendChild(h("label", { text: "Volumetric divisor (optional, e.g. 166/225/250 — varies by carrier)" }));
+    const divInput = h("input", { type: "number", min: "0", step: "1" });
+    divInput.value = taskGImportState.dimDivisor || "";
+    divInput.addEventListener("change", () => { taskGImportState.dimDivisor = parseFloat(divInput.value) || null; });
+    divWrap.appendChild(divInput);
+    root.appendChild(divWrap);
+  }
   const importRow = h("div", { class: "file-row" });
   const importFileInput = h("input", { type: "file", accept: ".xlsx,.xls" });
   importFileInput.addEventListener("change", (e) => handleTaskGImportFile(e.target.files[0]));
@@ -2972,6 +2993,8 @@ function renderTaskGRateCardEditor() {
     root.appendChild(importBtn);
   }
   root.appendChild(h("div", { id: "g-import-result" }));
+  root.appendChild(h("p", { class: "caption", text:
+    "Note: UPS-style international sheets that price by an internal zone code (resolved via a separate country → zone tab, e.g. GPS's UPS Worldwide Expedited) aren't self-service importable yet — ask for help importing one of those." }));
 
   const card = taskGCurrentCard();
   if (!card) return;
