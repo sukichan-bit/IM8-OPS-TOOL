@@ -2913,7 +2913,10 @@ function computeTaskGQuote() {
   }
   resultBox.appendChild(h("p", { class: "info", text:
     `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
-  const surchargeNote = quote.flatSurcharge ? ` (rate ${fmtMoney(quote.baseCost)} + flat surcharge ${fmtMoney(quote.flatSurcharge)})` : "";
+  const surchargeParts = [];
+  if (quote.percentSurcharge) surchargeParts.push(`+ ${(quote.percentSurcharge * 100).toFixed(2)}% fuel/surcharge ${fmtMoney(quote.percentAmount)}`);
+  if (quote.flatSurcharge) surchargeParts.push(`+ flat surcharge ${fmtMoney(quote.flatSurcharge)}`);
+  const surchargeNote = surchargeParts.length ? ` (rate ${fmtMoney(quote.baseCost)} ${surchargeParts.join(" ")})` : "";
   resultBox.appendChild(h("p", { class: "info", text:
     `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${fmtMoney(quote.perParcelCost)}${surchargeNote}` }));
   const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${fmtMoney(quote.totalCost)}` });
@@ -3098,6 +3101,14 @@ function renderTaskGRateCardEditor() {
   surInput.addEventListener("change", () => { card.flatSurcharge = parseFloat(surInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
   surWrap.appendChild(surInput);
   cfgGrid.appendChild(surWrap);
+
+  const pctWrap = h("div", { class: "col-field" });
+  pctWrap.appendChild(h("label", { text: "Fuel/% surcharge (optional, e.g. 0.03 = 3%)" }));
+  const pctInput = h("input", { type: "number", min: "0", step: "0.001", placeholder: "e.g. a carrier's fuel surcharge quoted as a %" });
+  pctInput.value = card.percentSurcharge || "";
+  pctInput.addEventListener("change", () => { card.percentSurcharge = parseFloat(pctInput.value) || 0; saveFreightRateCardsToStorage(taskGState.rateCards); });
+  pctWrap.appendChild(pctInput);
+  cfgGrid.appendChild(pctWrap);
 
   root.appendChild(cfgGrid);
 

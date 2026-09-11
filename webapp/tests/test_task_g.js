@@ -360,6 +360,94 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qJapan.expired, "GPS local/international cards have no stated expiry date, so shouldn't be auto-flagged expired");
 }
 
+// ---- percentSurcharge (e.g. a carrier's fuel surcharge quoted as a % of
+// the base rate rather than a flat fee) ----
+{
+  const card = taskG.emptyManualCard("NL", "percent surcharge test card", "kg", "cm");
+  card.brackets = [{ min: 0, max: 5, prices: { All: 10 } }];
+  card.percentSurcharge = 0.03;
+  card.flatSurcharge = 0.5;
+  const q = taskG.quoteFreight({ card, totalWeightKg: 2, parcelCount: 1, dest: { zone: "All" } });
+  // 10 * 1.03 = 10.30, + flat 0.50 = 10.80.
+  assert(!q.error && close(q.percentAmount, 0.3) && close(q.perParcelCost, 10.8), `percentSurcharge should apply before flatSurcharge, got ${JSON.stringify(q)}`);
+}
+
+// ---- parseEuIntraDestinationRowsSheet: DESTINATION rows (one per
+// carrier per destination) x weight columns — the shape used by Stord's
+// EU-origin intra-EU rate card. Fixture mirrors the real file's trickiest
+// bit: a blank spacer row and a footnote row *inside* a single logical
+// block (no fresh header in between) must not truncate that block, only
+// a genuinely new "DESTINATION" header should start a new one. ----
+{
+  const fixtureRows = [
+    ["DESTINATION", "CARRIER", "TOLL CHARGE", "FUEL SURCHARGE (EXCLUDED)", "0.25kg", "0.5kg"],
+    ["AUSTRIA", "SPRING_POST NL", "Included", 0.03, 6.6, 6.6],
+    ["AUSTRIA", "DHL_DE: WP", "Included", 0.0125, 7.99, 8.2],
+    ["BELGIUM", "SPRING_POST NL", "Included", 0.03, 7.68, 7.68],
+    [], // blank spacer row — must not end the SPRING_POST NL/DHL_DE block
+    ["SWITZERLAND", "DHL_DE: PI", "Included", 0.0125, 26.4, 26.4],
+    [],
+    ["1. SOME FOOTNOTE:", null, null, "TEXT, NO WEIGHT DATA"], // no weight-column data -> skipped, not a zone
+    [],
+    ["DESTINATION (MIDDLE EAST)", "CARRIER", "TOLL CHARGE", "FUEL SURCHARGE (EXCLUDED)", "0.25kg", "0.5kg"],
+    ["ISRAEL", "DPD", "Included", 0.16, 28.3, 28.3],
+  ];
+  const { cards, error } = taskG.parseEuIntraDestinationRowsSheet(fixtureRows, { warehouseId: "NL", cardNamePrefix: "NL test" });
+  assert(!error, `parse should succeed, got error: ${error}`);
+  assert(cards.length === 4, `4 distinct carriers (SPRING_POST NL, DHL_DE: WP, DHL_DE: PI, DPD) -> 4 cards, got ${cards.length}: ${cards.map((c) => c.name).join(", ")}`);
+
+  const spring = cards.find((c) => c.name.includes("SPRING_POST"));
+  assert(spring && spring.zones.length === 2 && spring.zones.includes("AUSTRIA") && spring.zones.includes("BELGIUM"),
+    `SPRING_POST should have both Austria and Belgium (blank row must not truncate it), got ${JSON.stringify(spring && spring.zones)}`);
+  assert(close(spring.percentSurcharge, 0.03), `SPRING_POST fuel %, got ${spring.percentSurcharge}`);
+
+  const dhlWp = cards.find((c) => c.name.includes("DHL_DE: WP"));
+  assert(dhlWp && dhlWp.zones.length === 1 && dhlWp.zones[0] === "AUSTRIA", `DHL_DE: WP should only have Austria, got ${JSON.stringify(dhlWp && dhlWp.zones)}`);
+
+  const dhlPi = cards.find((c) => c.name.includes("DHL_DE: PI"));
+  assert(dhlPi && dhlPi.zones.length === 1 && dhlPi.zones[0] === "SWITZERLAND",
+    `DHL_DE: PI (Switzerland) is separated from the main block by a blank row + footnote row with no new header — must still be picked up, got ${JSON.stringify(dhlPi && dhlPi.zones)}`);
+  assert(!dhlPi.zones.includes("1. SOME FOOTNOTE:"), "the footnote row (no weight-column data) must not become a bogus zone");
+
+  const dpd = cards.find((c) => c.name.includes("DPD"));
+  assert(dpd && dpd.zones.length === 1 && dpd.zones[0] === "ISRAEL", `the second DESTINATION (MIDDLE EAST) header block should be picked up separately, got ${JSON.stringify(dpd && dpd.zones)}`);
+
+  const q = taskG.quoteFreight({ card: spring, totalWeightKg: 0.25, parcelCount: 1, dest: { country: "AUSTRIA" } });
+  assert(!q.error && close(q.baseCost, 6.6) && close(q.percentAmount, 0.2), `Austria 0.25kg via SPRING_POST, got ${JSON.stringify(q)}`);
+
+  // A "-" cell means "not offered", not free — must error, not quote $0.
+  const dashRows = fixtureRows.map((r) => r.slice());
+  dashRows[3] = ["BELGIUM", "SPRING_POST NL", "Included", 0.03, 7.68, "-"];
+  const { cards: dashCards } = taskG.parseEuIntraDestinationRowsSheet(dashRows, { warehouseId: "NL" });
+  const springDash = dashCards.find((c) => c.name.includes("SPRING_POST"));
+  const qDash = taskG.quoteFreight({ card: springDash, totalWeightKg: 0.5, parcelCount: 1, dest: { country: "BELGIUM" } });
+  assert(!!qDash.error, `a "-" cell should error rather than quote free shipping, got ${JSON.stringify(qDash)}`);
+
+  const badResult = taskG.parseEuIntraDestinationRowsSheet([["nothing here"]], {});
+  assert(!!badResult.error, "a sheet with no DESTINATION header should error, not throw");
+}
+
+// ---- Real NL (OPS-WH03) rate cards, from "IM8_EU-origin-intra-EU-Stord-
+// Parcel-10-3-2025.xlsx" (provided by the user 2026-09-11), "2026 EU
+// Carrier Rates" tab (the 2025 tab in the same file is superseded, not
+// imported) — 6 cards, one per carrier, seeded into
+// defaultRateCards().NL. ----
+{
+  const defaults = taskG.defaultRateCards();
+  const nl = defaults.NL;
+  assert(nl.length === 6, `NL should have 6 default cards (one per carrier), got ${nl.length}: ${nl.map((c) => c.name).join(", ")}`);
+  assert(nl.every((c) => c.currency === "EUR"), "every NL card should be priced in EUR");
+
+  const spring = nl.find((c) => c.name.includes("SPRING_POST"));
+  const qGermany = taskG.quoteFreight({ card: spring, totalWeightKg: 0.25, parcelCount: 1, dest: { country: "GERMANY" } });
+  assert(!qGermany.error && close(qGermany.perParcelCost, 6.48), `NL Spring/Post 0.25kg to Germany, got ${JSON.stringify(qGermany)}`);
+
+  const dpd = nl.find((c) => c.name.includes("DPD"));
+  const qIsrael = taskG.quoteFreight({ card: dpd, totalWeightKg: 0.25, parcelCount: 1, dest: { country: "ISRAEL" } });
+  assert(!qIsrael.error && close(qIsrael.baseCost, 28.3) && close(qIsrael.percentSurcharge, 0.16), `NL DPD 0.25kg to Israel, got ${JSON.stringify(qIsrael)}`);
+  assert(!qIsrael.expired, "the NL rate card has no stated expiry date, so shouldn't be auto-flagged expired");
+}
+
 if (!ok) {
   console.error("\nTASK G TEST FAILED");
   process.exit(1);

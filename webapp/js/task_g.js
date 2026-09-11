@@ -284,6 +284,12 @@ function emptyManualCard(warehouseId, name, weightUnit, dimUnit, currency) {
     // surcharges belong baked into the bracket/perUnit price itself instead
     // (see notes); this is only for the always-on, zone-independent ones.
     flatSurcharge: 0,
+    // A proportional surcharge applied to the bracket/perUnit price before
+    // flatSurcharge is added — e.g. a carrier's fuel surcharge quoted as a
+    // percentage rather than a flat fee (0.03 = 3%). Very common across
+    // carriers (GPS's FedEx Ground: "10% off"; NL's Spring/Post NL: 3%;
+    // DHL: 1.25%; DPD: 16%) — a single flat-$ field can't represent this.
+    percentSurcharge: 0,
     // ISO date strings (or null) — informational, surfaced as a warning by
     // quoteFreight() when the card is past its expiry, but never blocks a
     // quote (an expired rate card is still the best estimate available
@@ -312,6 +318,7 @@ function emptyUspsCard(warehouseId, name, weightUnit, dimUnit, currency) {
     brackets: [{ min: 0, max: 1, prices: { ...zeros } }],
     perUnit: Object.fromEntries(zones.map((z) => [z, { base: 0, rate: 0, min: 0 }])),
     flatSurcharge: 0,
+    percentSurcharge: 0,
     effectiveDate: null,
     expiryDate: null,
     notes: "",
@@ -490,7 +497,10 @@ function parseUsToGlobalRateSheet(rawRows, opts) {
     const prices = {};
     for (const z of zoneCols) {
       const v = row[z.col];
-      prices[z.name] = typeof v === "number" ? Math.round(v * 100) / 100 : (parseFloat(v) || 0);
+      // A blank/"-" cell means that destination has no rate at this weight
+      // (not a $0 rate) — null, so priceForZone reports it rather than
+      // silently quoting free shipping.
+      prices[z.name] = typeof v === "number" ? Math.round(v * 100) / 100 : (parseFloat(v) || null);
     }
     const min = brackets.length ? Math.round((prevMax + 0.01) * 100) / 100 : 0;
     brackets.push({ min, max: weight, prices });
@@ -708,6 +718,116 @@ function parseUpsWorldwideExpeditedSheets(rateRawRows, exportZonesRawRows, opts)
 }
 
 
+// ---------- Import: EU intra-region "destination rows x weight columns" sheets ----------
+// The shape used by Stord's EU-origin intra-EU rate card: unlike the
+// other two parsers, DESTINATION is a row label here and WEIGHT is the
+// column axis (columns like "0.25kg", "0.5kg", ...), and each destination
+// can appear on MULTIPLE rows — one per carrier option (e.g. Austria via
+// "SPRING_POST NL" and again via "DHL_DE: WP", at different prices). A
+// sheet can also have more than one such block (e.g. a main EU block, then
+// a "DESTINATION (MIDDLE EAST)" block further down) — all are scanned.
+// Returns { cards: [...] } (one per distinct carrier — the natural service
+// split, same idea as ukRoyalMailCard()/ukDpdUkCard() being separate
+// cards) or { error }. Blank/"-" cells mean "not offered at that
+// weight/destination", not a $0 price — parsed as null so priceForZone()
+// reports it correctly instead of quoting free shipping.
+function parseEuIntraDestinationRowsSheet(rawRows, opts) {
+  opts = opts || {};
+  const firstCell = (row) => (row && row[0] != null ? String(row[0]).trim() : "");
+  const cellAt = (row, c) => (row && row[c] != null ? String(row[c]).trim() : "");
+
+  const headerIdxs = [];
+  for (let r = 0; r < rawRows.length; r++) {
+    if (/^destination\b/i.test(firstCell(rawRows[r]))) headerIdxs.push(r);
+  }
+  if (!headerIdxs.length) {
+    return { error: 'Could not find a "DESTINATION" header row — this doesn\'t look like this shape.' };
+  }
+
+  // byCarrier: carrier name -> { rows: [{destination, prices: {kg: value}}], fuelPct }
+  const byCarrier = new Map();
+  for (const headerIdx of headerIdxs) {
+    const headerRow = rawRows[headerIdx];
+    const carrierCol = headerRow.findIndex((v) => v != null && /^carrier$/i.test(String(v).trim()));
+    const fuelCol = headerRow.findIndex((v) => v != null && /^fuel surcharge/i.test(String(v).trim()));
+    const weightCols = [];
+    for (let c = 0; c < headerRow.length; c++) {
+      const v = headerRow[c];
+      if (v == null) continue;
+      const m = /^([\d.]+)\s*kg$/i.exec(String(v).trim());
+      if (m) weightCols.push({ col: c, kg: parseFloat(m[1]) });
+    }
+    if (!weightCols.length) continue; // a header-like row with no weight columns isn't a real block
+
+    for (let r = headerIdx + 1; r < rawRows.length; r++) {
+      const row = rawRows[r];
+      const destination = firstCell(row);
+      // A blank destination cell does NOT reliably end a block — some
+      // sheets have a blank spacer row (or footnote rows with no weight
+      // data, caught by hasAnyWeightData below) in the middle of a single
+      // logical block. Only a genuinely new header row ends this scan.
+      if (!destination) continue;
+      if (/^destination\b/i.test(destination)) break; // the next header block starts here
+
+      const hasAnyWeightData = weightCols.some((wc) => row[wc.col] != null && String(row[wc.col]).trim() !== "");
+      if (!hasAnyWeightData) continue; // a legend/footnote row sharing column A, e.g. "DHL_DE : PI" = "Pakket International"
+
+      const carrier = carrierCol >= 0 && cellAt(row, carrierCol) ? cellAt(row, carrierCol) : "Default";
+      const fuelRaw = fuelCol >= 0 ? row[fuelCol] : null;
+      const fuelPct = typeof fuelRaw === "number" ? fuelRaw : null;
+
+      if (!byCarrier.has(carrier)) byCarrier.set(carrier, { rows: [], fuelPcts: [] });
+      const entry = byCarrier.get(carrier);
+      const prices = {};
+      for (const wc of weightCols) {
+        const v = row[wc.col];
+        prices[wc.kg] = typeof v === "number" ? Math.round(v * 100) / 100 : null; // "-" or blank -> null, not 0
+      }
+      entry.rows.push({ destination, prices });
+      if (fuelPct != null) entry.fuelPcts.push(fuelPct);
+    }
+  }
+  if (!byCarrier.size) return { error: "Found DESTINATION header row(s) but no destination rows with weight data under them." };
+
+  const cards = [];
+  for (const [carrier, entry] of byCarrier) {
+    const zones = [];
+    for (const r of entry.rows) if (!zones.includes(r.destination)) zones.push(r.destination);
+    const allKg = [...new Set(entry.rows.flatMap((r) => Object.keys(r.prices).map(Number)))].sort((a, b) => a - b);
+    const brackets = [];
+    let prevMax = 0;
+    for (const kg of allKg) {
+      const prices = {};
+      for (const r of entry.rows) prices[r.destination] = r.prices[kg];
+      const min = brackets.length ? Math.round((prevMax + 0.01) * 100) / 100 : 0;
+      brackets.push({ min, max: kg, prices });
+      prevMax = kg;
+    }
+    // Fuel % is a carrier-level fee, not per-destination — take the first
+    // numeric value seen (a handful of rows carry a stray text value like
+    // "3% Included" instead of the number; those are simply skipped).
+    const fuelPct = entry.fuelPcts.length ? entry.fuelPcts[0] : 0;
+
+    const card = emptyManualCard(
+      opts.warehouseId || "NL",
+      opts.cardNamePrefix ? `${opts.cardNamePrefix} — ${carrier}` : carrier,
+      "kg", "cm",
+      opts.currency || "EUR"
+    );
+    card.zones = zones;
+    card.countryZoneMap = Object.fromEntries(zones.map((z) => [z, z]));
+    card.brackets = brackets;
+    card.dimDivisor = opts.dimDivisor || null;
+    card.percentSurcharge = fuelPct;
+    const notes = [];
+    if (fuelPct) notes.push(`Fuel surcharge excluded from these prices per the source file — applied here as a ${(fuelPct * 100).toFixed(2)}% surcharge on top of the base rate.`);
+    if (opts.extraNotes) notes.push(opts.extraNotes);
+    card.notes = notes.join(" ");
+    cards.push(card);
+  }
+  return { cards };
+}
+
 // ---------- US GPS (USOPS-WH04) — real rate cards (imported, expired) ----------
 // Source: "IM8 2025 GPS US2Global eCom Parcel Rate-Premium v2.xlsx" (provided
 // by the user 2026-09-11), DDP US2Global / DDU US2Global tabs, parsed via
@@ -794,6 +914,59 @@ function gpsUpsWorldwideExpeditedCard() {
 }
 
 
+// ---------- NL (OPS-WH03) — real rate cards ----------
+// Source: "IM8_EU-origin-intra-EU-Stord-Parcel-10-3-2025.xlsx" (provided
+// by the user 2026-09-11), "2026 EU Carrier Rates" tab (the sheet also has
+// a "2025 NL-EU Carrier rates" tab, superseded by the 2026 one — not
+// imported — and a "2026 Transit Times" tab of max weight/dims per
+// country, informational only, not needed for pricing). Parsed via
+// parseEuIntraDestinationRowsSheet() above, not hand-entered — one card
+// per carrier (the sheet lists multiple carrier options per destination),
+// same idea as the UK's separate Royal Mail/DPD cards. Neither this file
+// nor its 2026 tab states an explicit effective/expiry date, so these
+// aren't auto-flagged expired. DPD's card additionally carries a flat
+// €7.00/piece surcharge — the source file calls this out explicitly
+// as excluded from the quoted Middle East rates (on top of the 16% fuel
+// surcharge, which every card's percentSurcharge already covers).
+// Regenerate by re-importing rather than hand-editing.
+const NL_SPRING_POST_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["AUSTRIA","BELGIUM","BULGARIA","CROATIA","CYPRUS","CZECH REPUBLIC","DENMARK","ESTONIA","FINLAND","FRANCE","GERMANY","GREECE","HUNGARY","IRELAND","ITALY","LATVIA","LITHUANIA","LUXEMBOURG","MALTA","NETHERLANDS","POLAND","PORTUGAL","ROMANIA","SLOVAKIA","SLOVENIA","SPAIN","SWEDEN","SPAIN BALEARIC ISLANDS","SWITZERLAND (DDP)","NORWAY"],"countryZoneMap":{"AUSTRIA":"AUSTRIA","BELGIUM":"BELGIUM","BULGARIA":"BULGARIA","CROATIA":"CROATIA","CYPRUS":"CYPRUS","CZECH REPUBLIC":"CZECH REPUBLIC","DENMARK":"DENMARK","ESTONIA":"ESTONIA","FINLAND":"FINLAND","FRANCE":"FRANCE","GERMANY":"GERMANY","GREECE":"GREECE","HUNGARY":"HUNGARY","IRELAND":"IRELAND","ITALY":"ITALY","LATVIA":"LATVIA","LITHUANIA":"LITHUANIA","LUXEMBOURG":"LUXEMBOURG","MALTA":"MALTA","NETHERLANDS":"NETHERLANDS","POLAND":"POLAND","PORTUGAL":"PORTUGAL","ROMANIA":"ROMANIA","SLOVAKIA":"SLOVAKIA","SLOVENIA":"SLOVENIA","SPAIN":"SPAIN","SWEDEN":"SWEDEN","SPAIN BALEARIC ISLANDS":"SPAIN BALEARIC ISLANDS","SWITZERLAND (DDP)":"SWITZERLAND (DDP)","NORWAY":"NORWAY"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"AUSTRIA":6.6,"BELGIUM":7.68,"BULGARIA":5.33,"CROATIA":7.68,"CYPRUS":6.91,"CZECH REPUBLIC":6.38,"DENMARK":8.18,"ESTONIA":6.9,"FINLAND":8.5,"FRANCE":6.67,"GERMANY":6.29,"GREECE":8.18,"HUNGARY":5.54,"IRELAND":7.16,"ITALY":7.93,"LATVIA":6.5,"LITHUANIA":6.11,"LUXEMBOURG":5.52,"MALTA":8.33,"NETHERLANDS":6.11,"POLAND":5.91,"PORTUGAL":6.22,"ROMANIA":8.51,"SLOVAKIA":8.33,"SLOVENIA":6.32,"SPAIN":5.43,"SWEDEN":6.45,"SPAIN BALEARIC ISLANDS":12.67,"SWITZERLAND (DDP)":15.11,"NORWAY":18}},{"min":0.26,"max":0.5,"prices":{"AUSTRIA":6.6,"BELGIUM":7.68,"BULGARIA":7.02,"CROATIA":9.71,"CYPRUS":8.87,"CZECH REPUBLIC":6.59,"DENMARK":8.6,"ESTONIA":8.98,"FINLAND":10.29,"FRANCE":7.15,"GERMANY":6.29,"GREECE":11.11,"HUNGARY":6.69,"IRELAND":7.27,"ITALY":7.93,"LATVIA":8.48,"LITHUANIA":7.81,"LUXEMBOURG":6.04,"MALTA":10.7,"NETHERLANDS":6.11,"POLAND":5.91,"PORTUGAL":6.22,"ROMANIA":8.51,"SLOVAKIA":8.33,"SLOVENIA":8.32,"SPAIN":5.43,"SWEDEN":7.59,"SPAIN BALEARIC ISLANDS":12.67,"SWITZERLAND (DDP)":15.11,"NORWAY":18}},{"min":0.51,"max":0.75,"prices":{"AUSTRIA":7.27,"BELGIUM":7.68,"BULGARIA":8.73,"CROATIA":11.74,"CYPRUS":10.83,"CZECH REPUBLIC":6.76,"DENMARK":9.03,"ESTONIA":11.06,"FINLAND":12.06,"FRANCE":7.81,"GERMANY":6.29,"GREECE":14.03,"HUNGARY":7.86,"IRELAND":7.37,"ITALY":8.33,"LATVIA":10.48,"LITHUANIA":9.52,"LUXEMBOURG":6.56,"MALTA":13.04,"NETHERLANDS":6.11,"POLAND":6.22,"PORTUGAL":6.72,"ROMANIA":8.88,"SLOVAKIA":8.73,"SLOVENIA":10.3,"SPAIN":5.91,"SWEDEN":8.76,"SPAIN BALEARIC ISLANDS":13.79,"SWITZERLAND (DDP)":15.11,"NORWAY":18}},{"min":0.76,"max":1,"prices":{"AUSTRIA":7.27,"BELGIUM":7.68,"BULGARIA":9.83,"CROATIA":13.76,"CYPRUS":12.79,"CZECH REPUBLIC":6.97,"DENMARK":9.22,"ESTONIA":13.13,"FINLAND":13.84,"FRANCE":8.33,"GERMANY":6.29,"GREECE":16.96,"HUNGARY":8.98,"IRELAND":7.46,"ITALY":8.33,"LATVIA":12.48,"LITHUANIA":11.22,"LUXEMBOURG":7.07,"MALTA":15.39,"NETHERLANDS":6.11,"POLAND":6.22,"PORTUGAL":6.72,"ROMANIA":8.88,"SLOVAKIA":8.73,"SLOVENIA":12.28,"SPAIN":5.91,"SWEDEN":10.33,"SPAIN BALEARIC ISLANDS":13.79,"SWITZERLAND (DDP)":15.11,"NORWAY":18}},{"min":1.01,"max":1.5,"prices":{"AUSTRIA":8.17,"BELGIUM":7.68,"BULGARIA":12.02,"CROATIA":14.24,"CYPRUS":16.71,"CZECH REPUBLIC":7.36,"DENMARK":9.22,"ESTONIA":15.05,"FINLAND":14.47,"FRANCE":9.03,"GERMANY":7.04,"GREECE":22.79,"HUNGARY":9.92,"IRELAND":7.67,"ITALY":8.69,"LATVIA":15.05,"LITHUANIA":13.02,"LUXEMBOURG":8.11,"MALTA":20.1,"NETHERLANDS":6.11,"POLAND":6.69,"PORTUGAL":7.9,"ROMANIA":9.63,"SLOVAKIA":9.1,"SLOVENIA":16.28,"SPAIN":6.87,"SWEDEN":12.74,"SPAIN BALEARIC ISLANDS":14.89,"SWITZERLAND (DDP)":15.11,"NORWAY":18}},{"min":1.51,"max":2,"prices":{"AUSTRIA":8.17,"BELGIUM":7.68,"BULGARIA":12.4,"CROATIA":15.66,"CYPRUS":20.63,"CZECH REPUBLIC":7.73,"DENMARK":9.22,"ESTONIA":16.21,"FINLAND":14.47,"FRANCE":9.16,"GERMANY":7.04,"GREECE":26.43,"HUNGARY":10.3,"IRELAND":7.87,"ITALY":9.07,"LATVIA":16.21,"LITHUANIA":14.18,"LUXEMBOURG":8.63,"MALTA":24.26,"NETHERLANDS":6.11,"POLAND":7.13,"PORTUGAL":8.39,"ROMANIA":9.99,"SLOVAKIA":9.49,"SLOVENIA":18.29,"SPAIN":7.31,"SWEDEN":13.79,"SPAIN BALEARIC ISLANDS":16,"SWITZERLAND (DDP)":15.11,"NORWAY":18}},{"min":2.01,"max":3,"prices":{"AUSTRIA":9.26,"BELGIUM":8.14,"BULGARIA":13.93,"CROATIA":18.51,"CYPRUS":26.64,"CZECH REPUBLIC":8.55,"DENMARK":9.22,"ESTONIA":18.51,"FINLAND":15.21,"FRANCE":10.72,"GERMANY":8.08,"GREECE":30.33,"HUNGARY":11.87,"IRELAND":10.06,"ITALY":9.81,"LATVIA":18.5,"LITHUANIA":16.49,"LUXEMBOURG":9.06,"MALTA":28.68,"NETHERLANDS":7.4,"POLAND":9.19,"PORTUGAL":10.05,"ROMANIA":10.86,"SLOVAKIA":10.36,"SLOVENIA":21.36,"SPAIN":8.88,"SWEDEN":18.26,"SPAIN BALEARIC ISLANDS":18.22,"SWITZERLAND (DDP)":null,"NORWAY":null}},{"min":3.01,"max":4,"prices":{"AUSTRIA":11.4,"BELGIUM":8.14,"BULGARIA":14.71,"CROATIA":21.39,"CYPRUS":30.28,"CZECH REPUBLIC":9.34,"DENMARK":9.22,"ESTONIA":20.82,"FINLAND":15.21,"FRANCE":12.85,"GERMANY":9.03,"GREECE":34.2,"HUNGARY":12.62,"IRELAND":10.46,"ITALY":12.14,"LATVIA":20.81,"LITHUANIA":18.8,"LUXEMBOURG":9.49,"MALTA":33.11,"NETHERLANDS":7.4,"POLAND":10.11,"PORTUGAL":11.74,"ROMANIA":11.62,"SLOVAKIA":11.14,"SLOVENIA":24.42,"SPAIN":10.23,"SWEDEN":18.26,"SPAIN BALEARIC ISLANDS":20.45,"SWITZERLAND (DDP)":null,"NORWAY":null}},{"min":4.01,"max":5,"prices":{"AUSTRIA":12.21,"BELGIUM":8.14,"BULGARIA":15.47,"CROATIA":24.23,"CYPRUS":33.91,"CZECH REPUBLIC":10.09,"DENMARK":9.22,"ESTONIA":23.12,"FINLAND":15.21,"FRANCE":14.33,"GERMANY":9.87,"GREECE":38.1,"HUNGARY":13.41,"IRELAND":10.86,"ITALY":12.89,"LATVIA":23.12,"LITHUANIA":21.1,"LUXEMBOURG":10.09,"MALTA":37.53,"NETHERLANDS":7.4,"POLAND":11.03,"PORTUGAL":13.39,"ROMANIA":12.33,"SLOVAKIA":11.93,"SLOVENIA":27.48,"SPAIN":11.56,"SWEDEN":18.26,"SPAIN BALEARIC ISLANDS":22.69,"SWITZERLAND (DDP)":null,"NORWAY":null}},{"min":5.01,"max":10,"prices":{"AUSTRIA":15.3,"BELGIUM":12.94,"BULGARIA":21.36,"CROATIA":38.54,"CYPRUS":52.08,"CZECH REPUBLIC":14.68,"DENMARK":9.22,"ESTONIA":34.62,"FINLAND":15.21,"FRANCE":25.62,"GERMANY":12.67,"GREECE":57.53,"HUNGARY":18.91,"IRELAND":17.75,"ITALY":16.62,"LATVIA":34.62,"LITHUANIA":32.59,"LUXEMBOURG":12.95,"MALTA":59.66,"NETHERLANDS":11.88,"POLAND":23.52,"PORTUGAL":21.53,"ROMANIA":17.63,"SLOVAKIA":16.86,"SLOVENIA":42.77,"SPAIN":18.32,"SWEDEN":25.17,"SPAIN BALEARIC ISLANDS":33.82,"SWITZERLAND (DDP)":null,"NORWAY":null}},{"min":10.01,"max":15,"prices":{"AUSTRIA":21.82,"BELGIUM":14.55,"BULGARIA":35.73,"CROATIA":52.82,"CYPRUS":70.27,"CZECH REPUBLIC":26.73,"DENMARK":9.22,"ESTONIA":46.13,"FINLAND":15.21,"FRANCE":33.17,"GERMANY":16.44,"GREECE":76.97,"HUNGARY":29.87,"IRELAND":50.39,"ITALY":20.35,"LATVIA":46.13,"LITHUANIA":44.1,"LUXEMBOURG":16.71,"MALTA":81.8,"NETHERLANDS":13.38,"POLAND":30.35,"PORTUGAL":30.58,"ROMANIA":33.34,"SLOVAKIA":25.74,"SLOVENIA":58.06,"SPAIN":25.62,"SWEDEN":27.48,"SPAIN BALEARIC ISLANDS":44.96,"SWITZERLAND (DDP)":null,"NORWAY":null}},{"min":15.01,"max":20,"prices":{"AUSTRIA":26.34,"BELGIUM":15.78,"BULGARIA":39.59,"CROATIA":67.12,"CYPRUS":88.46,"CZECH REPUBLIC":30.59,"DENMARK":9.22,"ESTONIA":57.65,"FINLAND":15.21,"FRANCE":40.64,"GERMANY":19.57,"GREECE":96.41,"HUNGARY":33.74,"IRELAND":55.07,"ITALY":25.86,"LATVIA":57.62,"LITHUANIA":55.62,"LUXEMBOURG":23.61,"MALTA":103.94,"NETHERLANDS":14.53,"POLAND":39.72,"PORTUGAL":39.9,"ROMANIA":37.01,"SLOVAKIA":29.59,"SLOVENIA":73.38,"SPAIN":33.15,"SWEDEN":32.06,"SPAIN BALEARIC ISLANDS":56.11,"SWITZERLAND (DDP)":null,"NORWAY":null}},{"min":20.01,"max":25,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GERMANY":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null,"SWITZERLAND (DDP)":null,"NORWAY":null}},{"min":25.01,"max":30,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GERMANY":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null,"SWITZERLAND (DDP)":null,"NORWAY":null}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":0,"percentSurcharge":0.03,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 3.00% surcharge on top of the base rate."};
+const NL_DHL_DE_WP_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["AUSTRIA","BELGIUM","BULGARIA","CROATIA","CYPRUS","CZECH REPUBLIC","DENMARK","ESTONIA","FINLAND","FRANCE","GREECE","HUNGARY","IRELAND","ITALY","LATVIA","LITHUANIA","LUXEMBOURG","MALTA","NETHERLANDS","POLAND","PORTUGAL","ROMANIA","SLOVAKIA","SLOVENIA","SPAIN","SWEDEN","SPAIN BALEARIC ISLANDS"],"countryZoneMap":{"AUSTRIA":"AUSTRIA","BELGIUM":"BELGIUM","BULGARIA":"BULGARIA","CROATIA":"CROATIA","CYPRUS":"CYPRUS","CZECH REPUBLIC":"CZECH REPUBLIC","DENMARK":"DENMARK","ESTONIA":"ESTONIA","FINLAND":"FINLAND","FRANCE":"FRANCE","GREECE":"GREECE","HUNGARY":"HUNGARY","IRELAND":"IRELAND","ITALY":"ITALY","LATVIA":"LATVIA","LITHUANIA":"LITHUANIA","LUXEMBOURG":"LUXEMBOURG","MALTA":"MALTA","NETHERLANDS":"NETHERLANDS","POLAND":"POLAND","PORTUGAL":"PORTUGAL","ROMANIA":"ROMANIA","SLOVAKIA":"SLOVAKIA","SLOVENIA":"SLOVENIA","SPAIN":"SPAIN","SWEDEN":"SWEDEN","SPAIN BALEARIC ISLANDS":"SPAIN BALEARIC ISLANDS"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"AUSTRIA":7.99,"BELGIUM":7.65,"BULGARIA":10.63,"CROATIA":10.63,"CYPRUS":10.63,"CZECH REPUBLIC":7.65,"DENMARK":8.38,"ESTONIA":10.63,"FINLAND":8.5,"FRANCE":7.83,"GREECE":8.26,"HUNGARY":7.84,"IRELAND":8.76,"ITALY":8.5,"LATVIA":10.63,"LITHUANIA":10.63,"LUXEMBOURG":8.76,"MALTA":10.63,"NETHERLANDS":7.67,"POLAND":7.3,"PORTUGAL":8.78,"ROMANIA":7.37,"SLOVAKIA":7.89,"SLOVENIA":9.89,"SPAIN":8.35,"SWEDEN":8.38,"SPAIN BALEARIC ISLANDS":null}},{"min":0.26,"max":0.5,"prices":{"AUSTRIA":8.2,"BELGIUM":7.98,"BULGARIA":12.79,"CROATIA":12.79,"CYPRUS":12.79,"CZECH REPUBLIC":8.78,"DENMARK":9.12,"ESTONIA":12.79,"FINLAND":9.35,"FRANCE":8.33,"GREECE":9.59,"HUNGARY":9,"IRELAND":9.77,"ITALY":9.03,"LATVIA":12.79,"LITHUANIA":12.79,"LUXEMBOURG":9,"MALTA":12.79,"NETHERLANDS":8.88,"POLAND":8.42,"PORTUGAL":10.26,"ROMANIA":8.38,"SLOVAKIA":9.1,"SLOVENIA":11.75,"SPAIN":9.74,"SWEDEN":9.38,"SPAIN BALEARIC ISLANDS":null}},{"min":0.51,"max":0.75,"prices":{"AUSTRIA":8.51,"BELGIUM":8.47,"BULGARIA":16.03,"CROATIA":16.03,"CYPRUS":16.03,"CZECH REPUBLIC":10.46,"DENMARK":10.23,"ESTONIA":16.03,"FINLAND":10.64,"FRANCE":9.09,"GREECE":11.59,"HUNGARY":10.73,"IRELAND":11.28,"ITALY":9.83,"LATVIA":16.03,"LITHUANIA":16.03,"LUXEMBOURG":9.35,"MALTA":16.03,"NETHERLANDS":10.7,"POLAND":10.11,"PORTUGAL":12.48,"ROMANIA":9.89,"SLOVAKIA":10.92,"SLOVENIA":14.55,"SPAIN":11.83,"SWEDEN":10.89,"SPAIN BALEARIC ISLANDS":null}},{"min":0.76,"max":1,"prices":{"AUSTRIA":8.72,"BELGIUM":8.79,"BULGARIA":18.19,"CROATIA":18.19,"CYPRUS":18.19,"CZECH REPUBLIC":11.59,"DENMARK":10.97,"ESTONIA":18.19,"FINLAND":11.5,"FRANCE":9.59,"GREECE":12.92,"HUNGARY":11.88,"IRELAND":12.28,"ITALY":10.36,"LATVIA":18.19,"LITHUANIA":18.19,"LUXEMBOURG":9.59,"MALTA":18.19,"NETHERLANDS":11.91,"POLAND":11.23,"PORTUGAL":13.96,"ROMANIA":10.89,"SLOVAKIA":12.14,"SLOVENIA":16.41,"SPAIN":13.22,"SWEDEN":11.9,"SPAIN BALEARIC ISLANDS":null}},{"min":1.01,"max":1.5,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":1.51,"max":2,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":2.01,"max":3,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":3.01,"max":4,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":4.01,"max":5,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":5.01,"max":10,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":10.01,"max":15,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":15.01,"max":20,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":20.01,"max":25,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}},{"min":25.01,"max":30,"prices":{"AUSTRIA":null,"BELGIUM":null,"BULGARIA":null,"CROATIA":null,"CYPRUS":null,"CZECH REPUBLIC":null,"DENMARK":null,"ESTONIA":null,"FINLAND":null,"FRANCE":null,"GREECE":null,"HUNGARY":null,"IRELAND":null,"ITALY":null,"LATVIA":null,"LITHUANIA":null,"LUXEMBOURG":null,"MALTA":null,"NETHERLANDS":null,"POLAND":null,"PORTUGAL":null,"ROMANIA":null,"SLOVAKIA":null,"SLOVENIA":null,"SPAIN":null,"SWEDEN":null,"SPAIN BALEARIC ISLANDS":null}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":0,"percentSurcharge":0.0125,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 1.25% surcharge on top of the base rate."};
+const NL_DHL_NL_4U_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["BELGIUM","NETHERLANDS"],"countryZoneMap":{"BELGIUM":"BELGIUM","NETHERLANDS":"NETHERLANDS"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"BELGIUM":8.24,"NETHERLANDS":5.85}},{"min":0.26,"max":0.5,"prices":{"BELGIUM":8.24,"NETHERLANDS":5.85}},{"min":0.51,"max":0.75,"prices":{"BELGIUM":8.24,"NETHERLANDS":6.07}},{"min":0.76,"max":1,"prices":{"BELGIUM":8.24,"NETHERLANDS":6.07}},{"min":1.01,"max":1.5,"prices":{"BELGIUM":9.75,"NETHERLANDS":6.07}},{"min":1.51,"max":2,"prices":{"BELGIUM":9.75,"NETHERLANDS":6.07}},{"min":2.01,"max":3,"prices":{"BELGIUM":9.75,"NETHERLANDS":6.07}},{"min":3.01,"max":4,"prices":{"BELGIUM":9.75,"NETHERLANDS":6.07}},{"min":4.01,"max":5,"prices":{"BELGIUM":9.75,"NETHERLANDS":7.18}},{"min":5.01,"max":10,"prices":{"BELGIUM":10.66,"NETHERLANDS":7.84}},{"min":10.01,"max":15,"prices":{"BELGIUM":12.64,"NETHERLANDS":9.31}},{"min":15.01,"max":20,"prices":{"BELGIUM":16.72,"NETHERLANDS":12.31}},{"min":20.01,"max":25,"prices":{"BELGIUM":32.19,"NETHERLANDS":12.31}},{"min":25.01,"max":30,"prices":{"BELGIUM":31.61,"NETHERLANDS":23.28}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":0,"percentSurcharge":0.0125,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 1.25% surcharge on top of the base rate."};
+const NL_DHL_DE_KP_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["GERMANY"],"countryZoneMap":{"GERMANY":"GERMANY"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"GERMANY":4.81}},{"min":0.26,"max":0.5,"prices":{"GERMANY":4.81}},{"min":0.51,"max":0.75,"prices":{"GERMANY":4.81}},{"min":0.76,"max":1,"prices":{"GERMANY":4.81}},{"min":1.01,"max":1.5,"prices":{"GERMANY":null}},{"min":1.51,"max":2,"prices":{"GERMANY":null}},{"min":2.01,"max":3,"prices":{"GERMANY":null}},{"min":3.01,"max":4,"prices":{"GERMANY":null}},{"min":4.01,"max":5,"prices":{"GERMANY":null}},{"min":5.01,"max":10,"prices":{"GERMANY":null}},{"min":10.01,"max":15,"prices":{"GERMANY":null}},{"min":15.01,"max":20,"prices":{"GERMANY":null}},{"min":20.01,"max":25,"prices":{"GERMANY":null}},{"min":25.01,"max":30,"prices":{"GERMANY":null}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":0,"percentSurcharge":0.0125,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 1.25% surcharge on top of the base rate."};
+const NL_DHL_DE_PI_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["MONACO","SWITZERLAND","NORWAY"],"countryZoneMap":{"MONACO":"MONACO","SWITZERLAND":"SWITZERLAND","NORWAY":"NORWAY"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":0.26,"max":0.5,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":0.51,"max":0.75,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":0.76,"max":1,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":1.01,"max":1.5,"prices":{"MONACO":26.18,"SWITZERLAND":27.35,"NORWAY":21.31}},{"min":1.51,"max":2,"prices":{"MONACO":26.18,"SWITZERLAND":27.35,"NORWAY":21.31}},{"min":2.01,"max":3,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":3.01,"max":4,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":4.01,"max":5,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":5.01,"max":10,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":10.01,"max":15,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":15.01,"max":20,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":20.01,"max":25,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":25.01,"max":30,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":0,"percentSurcharge":0.0125,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 1.25% surcharge on top of the base rate."};
+const NL_DPD_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["ISRAEL","SAUDI ARABIA","UNITED ARAB EMIRATES"],"countryZoneMap":{"ISRAEL":"ISRAEL","SAUDI ARABIA":"SAUDI ARABIA","UNITED ARAB EMIRATES":"UNITED ARAB EMIRATES"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"ISRAEL":28.3,"SAUDI ARABIA":16.37,"UNITED ARAB EMIRATES":15.04}},{"min":0.26,"max":0.5,"prices":{"ISRAEL":28.3,"SAUDI ARABIA":16.37,"UNITED ARAB EMIRATES":15.04}},{"min":0.51,"max":0.75,"prices":{"ISRAEL":37.42,"SAUDI ARABIA":19.7,"UNITED ARAB EMIRATES":18.03}},{"min":0.76,"max":1,"prices":{"ISRAEL":37.42,"SAUDI ARABIA":19.7,"UNITED ARAB EMIRATES":18.03}},{"min":1.01,"max":1.5,"prices":{"ISRAEL":46.13,"SAUDI ARABIA":23.03,"UNITED ARAB EMIRATES":21.02}},{"min":1.51,"max":2,"prices":{"ISRAEL":55.25,"SAUDI ARABIA":26.36,"UNITED ARAB EMIRATES":24.02}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":7,"percentSurcharge":0.16,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 16.00% surcharge on top of the base rate. Also excludes a €7.00/piece DDP surcharge to Middle East destinations (applied here as a flat fee) and import duties (invoiced separately, +1.5% handling — not included)."};
+
+function nlSpringPostCard() {
+  const card = emptyManualCard("NL", "NL Intra-EU — SPRING_POST NL", "kg", "cm");
+  Object.assign(card, NL_SPRING_POST_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  return card;
+}
+function nlDhlDeWpCard() {
+  const card = emptyManualCard("NL", "NL Intra-EU — DHL_DE: WP", "kg", "cm");
+  Object.assign(card, NL_DHL_DE_WP_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  return card;
+}
+function nlDhlNl4uCard() {
+  const card = emptyManualCard("NL", "NL Intra-EU — DHL_NL: 4U", "kg", "cm");
+  Object.assign(card, NL_DHL_NL_4U_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  return card;
+}
+function nlDhlDeKpCard() {
+  const card = emptyManualCard("NL", "NL Intra-EU — DHL_DE: KP", "kg", "cm");
+  Object.assign(card, NL_DHL_DE_KP_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  return card;
+}
+function nlDhlDePiCard() {
+  const card = emptyManualCard("NL", "NL Intra-EU — DHL_DE: PI", "kg", "cm");
+  Object.assign(card, NL_DHL_DE_PI_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  return card;
+}
+function nlDpdCard() {
+  const card = emptyManualCard("NL", "NL Intra-EU — DPD (Middle East)", "kg", "cm");
+  Object.assign(card, NL_DPD_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  return card;
+}
+
 // Seed: one starter rate card per warehouse. UK (OPS-WH02) and US GPS
 // (USOPS-WH04) ship with the warehouses' real rate cards (see above)
 // since we have them (GPS's is expired — see the block above); the rest
@@ -806,7 +979,7 @@ function defaultRateCards() {
   return {
     HK: [emptyManualCard("HK", "HK rate card", "kg", "cm")],
     UK: [ukRoyalMailCard(), ukDpdUkCard(), ukDpdNonUkCard()],
-    NL: [emptyManualCard("NL", "NL rate card", "kg", "cm")],
+    NL: [nlSpringPostCard(), nlDhlDeWpCard(), nlDhlNl4uCard(), nlDhlDeKpCard(), nlDhlDePiCard(), nlDpdCard()],
     US_GPS: [
       gpsDdpCard(), gpsDduCard(),
       gpsUspsGaCard(), gpsUspsPmCard(), gpsUpsGroundCard(), gpsFedexGroundCard(), gpsFedexGroundEconomyCard(),
@@ -910,8 +1083,10 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
   const perParcelWeight = computeChargeableWeightPerParcel({ totalWeightKg, parcelCount: count, dims, card });
   const priceResult = priceForZone(card, zoneResult.zone, perParcelWeight);
   if (priceResult.error) return priceResult;
+  const percentSurcharge = Number(card.percentSurcharge) || 0;
+  const percentAmount = Math.round(priceResult.price * percentSurcharge * 100) / 100;
   const flatSurcharge = Number(card.flatSurcharge) || 0;
-  const perParcelCost = priceResult.price + flatSurcharge;
+  const perParcelCost = priceResult.price + percentAmount + flatSurcharge;
   const expired = !!(card.expiryDate && new Date(card.expiryDate) < new Date());
   return {
     parcelCount: count,
@@ -919,6 +1094,8 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
     weightUnit: card.weightUnit,
     currency: card.currency || "",
     baseCost: priceResult.price,
+    percentSurcharge,
+    percentAmount,
     flatSurcharge,
     perParcelCost,
     totalCost: perParcelCost * count,
@@ -938,8 +1115,8 @@ if (typeof window !== "undefined") {
     convertWeight, convertLength, volumetricWeight,
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
-    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, defaultRateCards,
-    excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets,
+    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, defaultRateCards,
+    excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
   };
@@ -951,8 +1128,8 @@ if (typeof module !== "undefined") {
     convertWeight, convertLength, volumetricWeight,
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
-    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, defaultRateCards,
-    excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets,
+    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, defaultRateCards,
+    excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
   };
