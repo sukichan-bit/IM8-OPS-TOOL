@@ -2745,6 +2745,53 @@ function taskGCurrentCard() {
   return cards.find((c) => c.id === taskGState.rateCardId) || cards[0] || null;
 }
 
+// Transient state for the "import a rate card from a file" flow — the
+// loaded workbook itself never gets persisted (only the parsed card does),
+// so this lives outside taskGState/localStorage and resets once an import
+// succeeds or a different file is chosen.
+const taskGImportState = { wb: null, sheets: [], sheetName: null, fileName: "" };
+
+async function handleTaskGImportFile(file) {
+  if (!file) {
+    taskGImportState.wb = null; taskGImportState.sheets = []; taskGImportState.sheetName = null; taskGImportState.fileName = "";
+    renderTaskG();
+    return;
+  }
+  const source = await loadWorkbookOrCsv(file);
+  const resultBox = document.getElementById("g-import-result");
+  if (!source.wb) {
+    taskGImportState.wb = null;
+    if (resultBox) resultBox.replaceChildren(h("p", { class: "error", text: "This isn't a multi-tab Excel workbook." }));
+    return;
+  }
+  taskGImportState.wb = source.wb;
+  taskGImportState.sheets = source.sheets;
+  taskGImportState.fileName = file.name;
+  taskGImportState.sheetName = source.sheets.find((s) => /ddp|ddu/i.test(s)) || source.sheets[0];
+  renderTaskG();
+}
+
+function runTaskGImport() {
+  const resultBox = document.getElementById("g-import-result");
+  const wh = taskG.getWarehouse(taskGState.warehouseId);
+  const rawRows = io.sheetToRawRows(taskGImportState.wb, taskGImportState.sheetName, null);
+  const { card, error } = taskG.parseUsToGlobalRateSheet(rawRows, {
+    warehouseId: taskGState.warehouseId,
+    weightUnit: wh.weightUnit,
+    dimUnit: wh.dimUnit,
+    cardName: `${taskGImportState.sheetName} (imported ${todayStamp()})`,
+  });
+  if (error) {
+    if (resultBox) resultBox.replaceChildren(h("p", { class: "error", text: error }));
+    return;
+  }
+  taskGState.rateCards[taskGState.warehouseId].push(card);
+  taskGState.rateCardId = card.id;
+  saveFreightRateCardsToStorage(taskGState.rateCards);
+  taskGImportState.wb = null; taskGImportState.sheets = []; taskGImportState.sheetName = null; taskGImportState.fileName = "";
+  renderTaskG();
+}
+
 function renderTaskGWarehouseSelect() {
   const select = document.getElementById("g-warehouse");
   select.innerHTML = "";
@@ -2856,6 +2903,9 @@ function computeTaskGQuote() {
     return;
   }
 
+  if (quote.expired) {
+    resultBox.appendChild(h("p", { class: "warning", text: `⚠ This rate card expired on ${quote.expiryDate} — confirm current pricing before quoting a customer.` }));
+  }
   resultBox.appendChild(h("p", { class: "info", text:
     `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
   const surchargeNote = quote.flatSurcharge ? ` (rate ${quote.baseCost.toFixed(2)} + flat surcharge ${quote.flatSurcharge.toFixed(2)})` : "";
@@ -2896,6 +2946,31 @@ function renderTaskGRateCardEditor() {
   });
   root.appendChild(addBtn);
 
+  root.appendChild(h("hr", { class: "ops2-hr" }));
+  root.appendChild(h("h6", { text: "Import a rate card from a file" }));
+  root.appendChild(h("p", { class: "caption", text:
+    "For tables too large to type by hand (e.g. a \"Destinations\" row of countries × dozens of weight-break rows, like GPS's US-to-Global parcel rate): upload the file, pick the right tab, and import it as a new rate card." }));
+  const importRow = h("div", { class: "file-row" });
+  const importFileInput = h("input", { type: "file", accept: ".xlsx,.xls" });
+  importFileInput.addEventListener("change", (e) => handleTaskGImportFile(e.target.files[0]));
+  importRow.appendChild(importFileInput);
+  root.appendChild(importRow);
+  if (taskGImportState.fileName) root.appendChild(h("p", { class: "caption", text: `Loaded '${taskGImportState.fileName}'.` }));
+  if (taskGImportState.wb) {
+    const sheetWrap = h("div", { class: "col-field" });
+    sheetWrap.appendChild(h("label", { text: "Sheet/tab to import" }));
+    const sheetSelect = h("select", {});
+    taskGImportState.sheets.forEach((s) => sheetSelect.appendChild(h("option", { value: s, text: s })));
+    sheetSelect.value = taskGImportState.sheetName;
+    sheetSelect.addEventListener("change", () => { taskGImportState.sheetName = sheetSelect.value; });
+    sheetWrap.appendChild(sheetSelect);
+    root.appendChild(sheetWrap);
+    const importBtn = h("button", { class: "run-btn", text: "Import as a new rate card" });
+    importBtn.addEventListener("click", () => runTaskGImport());
+    root.appendChild(importBtn);
+  }
+  root.appendChild(h("div", { id: "g-import-result" }));
+
   const card = taskGCurrentCard();
   if (!card) return;
 
@@ -2912,6 +2987,12 @@ function renderTaskGRateCardEditor() {
   });
   nameWrap.appendChild(nameInput);
   root.appendChild(nameWrap);
+
+  if (card.effectiveDate || card.expiryDate) {
+    const isExpired = card.expiryDate && new Date(card.expiryDate) < new Date();
+    root.appendChild(h("p", { class: isExpired ? "warning" : "caption", text:
+      `${isExpired ? "⚠ EXPIRED — " : ""}Effective ${card.effectiveDate || "?"} to ${card.expiryDate || "?"} (from imported file).` }));
+  }
 
   if (cards.length > 1) {
     const delBtn = h("button", { class: "clear-btn", text: "Delete this rate card" });

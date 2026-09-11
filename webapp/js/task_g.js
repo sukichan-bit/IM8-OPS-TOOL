@@ -283,6 +283,12 @@ function emptyManualCard(warehouseId, name, weightUnit, dimUnit) {
     // surcharges belong baked into the bracket/perUnit price itself instead
     // (see notes); this is only for the always-on, zone-independent ones.
     flatSurcharge: 0,
+    // ISO date strings (or null) — informational, surfaced as a warning by
+    // quoteFreight() when the card is past its expiry, but never blocks a
+    // quote (an expired rate card is still the best estimate available
+    // until a fresh one is entered/imported).
+    effectiveDate: null,
+    expiryDate: null,
     notes: "",
   };
 }
@@ -304,6 +310,8 @@ function emptyUspsCard(warehouseId, name, weightUnit, dimUnit) {
     brackets: [{ min: 0, max: 1, prices: { ...zeros } }],
     perUnit: Object.fromEntries(zones.map((z) => [z, { base: 0, rate: 0, min: 0 }])),
     flatSurcharge: 0,
+    effectiveDate: null,
+    expiryDate: null,
     notes: "",
   };
 }
@@ -388,6 +396,118 @@ function ukDpdNonUkCard() {
     "card notes) — confirm before quoting. Rates exclude UK VAT. DDP admin fee/duties charged at cost, not " +
     "included.";
   return card;
+}
+
+// ---------- Import: "US-to-Global eCom Parcel Rate" style sheets ----------
+// Some rate cards (e.g. GPS/USOPS-WH04's international parcel rates) are
+// far too large to hand-type or bake into source — tens of destination
+// countries x 60+ weight-break rows. Rather than embed that as static
+// data (which also can't be refreshed when the carrier reissues rates),
+// this parses the sheet's own layout at import time: a "Destinations" row
+// of country names, a "Terms" row (DDP/DDU), a "Dim Factor" row, a
+// "Minimum" row, "Effective Date:"/"Expired Date:" rows, then one row per
+// weight break point (lb) with a price per country column. Returns
+// { card } or { error }. rawRows: raw 2D array, e.g. from
+// io.sheetToRawRows(wb, sheetName, null).
+function excelSerialToIsoDate(serial) {
+  if (serial instanceof Date) return isNaN(serial.getTime()) ? null : serial.toISOString().slice(0, 10);
+  if (typeof serial !== "number" || !isFinite(serial)) return null;
+  return new Date(Date.UTC(1899, 11, 30) + serial * 86400000).toISOString().slice(0, 10);
+}
+
+function parseUsToGlobalRateSheet(rawRows, opts) {
+  opts = opts || {};
+  const firstCell = (row) => (row && row[0] != null ? String(row[0]).trim() : "");
+
+  const destRowIdx = rawRows.findIndex((r) => /^destinations?$/i.test(firstCell(r)));
+  if (destRowIdx < 0) {
+    return { error: 'Could not find a "Destinations" row in column A — this doesn\'t look like a US-to-Global rate sheet.' };
+  }
+  const destRow = rawRows[destRowIdx];
+  const zoneCols = [];
+  for (let c = 1; c < destRow.length; c++) {
+    const name = destRow[c] == null ? "" : String(destRow[c]).trim();
+    if (name) zoneCols.push({ col: c, name });
+  }
+  if (!zoneCols.length) return { error: 'Found a "Destinations" row but no destination names in it.' };
+
+  const termsRowIdx = rawRows.findIndex((r) => /^terms$/i.test(firstCell(r)));
+  let terms = "";
+  if (termsRowIdx >= 0) {
+    const termsRow = rawRows[termsRowIdx];
+    const found = zoneCols.map((z) => termsRow[z.col]).find((v) => v != null && String(v).trim());
+    terms = found ? String(found).trim() : "";
+  }
+
+  const dimRowIdx = rawRows.findIndex((r) => /^dim\s*factor$/i.test(firstCell(r)));
+  let dimDivisor = null;
+  if (dimRowIdx >= 0) {
+    const dimRow = rawRows[dimRowIdx];
+    const found = zoneCols.map((z) => dimRow[z.col]).find((v) => typeof v === "number" && v > 0);
+    if (found) dimDivisor = found;
+  }
+
+  const minRowIdx = rawRows.findIndex((r) => /^minimum$/i.test(firstCell(r)));
+  let hasNonzeroMinimum = false;
+  if (minRowIdx >= 0) {
+    const minRow = rawRows[minRowIdx];
+    hasNonzeroMinimum = zoneCols.some((z) => Number(minRow[z.col]) > 0);
+  }
+
+  // Date rows are labelled in column A but the serial/Date value's column
+  // isn't consistent between sheets — scan the whole row for the first
+  // plausible value instead of assuming a fixed column.
+  const findDateRow = (label) => rawRows.find((r) => firstCell(r).toLowerCase().indexOf(label) === 0);
+  const extractDateValue = (row) => (row || []).find((v) => v instanceof Date || (typeof v === "number" && v > 30000 && v < 80000));
+  const effectiveDate = excelSerialToIsoDate(extractDateValue(findDateRow("effective date")));
+  const expiredRow = findDateRow("expired date") || findDateRow("expiry date");
+  const expiryDate = excelSerialToIsoDate(extractDateValue(expiredRow));
+
+  // Weight break points (lb) start right after the "...Transit Time"
+  // header row (falls back to right after the Minimum row if that header
+  // isn't found), and run while column A keeps parsing as a positive
+  // number — the first non-numeric/blank row ends the table.
+  const headerRowIdx = rawRows.findIndex((r) => /transit/i.test(firstCell(r)));
+  const startIdx = headerRowIdx >= 0 ? headerRowIdx + 1 : (minRowIdx >= 0 ? minRowIdx + 1 : destRowIdx + 1);
+  const brackets = [];
+  let prevMax = 0;
+  for (let r = startIdx; r < rawRows.length; r++) {
+    const weight = parseFloat(firstCell(rawRows[r]));
+    if (!(weight > 0)) break;
+    const row = rawRows[r];
+    const prices = {};
+    for (const z of zoneCols) {
+      const v = row[z.col];
+      prices[z.name] = typeof v === "number" ? Math.round(v * 100) / 100 : (parseFloat(v) || 0);
+    }
+    const min = brackets.length ? Math.round((prevMax + 0.01) * 100) / 100 : 0;
+    brackets.push({ min, max: weight, prices });
+    prevMax = weight;
+  }
+  if (!brackets.length) {
+    return { error: "Found destination columns but no weight-break rows with prices under them — check the sheet layout." };
+  }
+
+  const card = emptyManualCard(
+    opts.warehouseId || "US_GPS",
+    opts.cardName || `US to Global${terms ? ` (${terms})` : ""}`,
+    opts.weightUnit || "lb",
+    opts.dimUnit || "in"
+  );
+  card.zones = zoneCols.map((z) => z.name);
+  card.countryZoneMap = Object.fromEntries(card.zones.map((n) => [n, n]));
+  card.brackets = brackets;
+  card.dimDivisor = dimDivisor;
+  card.effectiveDate = effectiveDate;
+  card.expiryDate = expiryDate;
+  const notes = [];
+  if (terms) notes.push(`Terms: ${terms}.`);
+  if (effectiveDate || expiryDate) notes.push(`Effective ${effectiveDate || "?"} to ${expiryDate || "?"} per source file.`);
+  if (hasNonzeroMinimum) {
+    notes.push('This sheet has a non-zero per-destination "Minimum" charge that this tool does not yet apply automatically — check the Minimum row in the source file.');
+  }
+  card.notes = notes.join(" ");
+  return { card };
 }
 
 // Seed: one starter rate card per warehouse. UK (OPS-WH02) ships with the
@@ -503,6 +623,7 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
   if (priceResult.error) return priceResult;
   const flatSurcharge = Number(card.flatSurcharge) || 0;
   const perParcelCost = priceResult.price + flatSurcharge;
+  const expired = !!(card.expiryDate && new Date(card.expiryDate) < new Date());
   return {
     parcelCount: count,
     perParcelWeight,
@@ -513,6 +634,10 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
     totalCost: perParcelCost * count,
     zone: zoneResult.zone,
     zoneRaw: zoneResult.raw || zoneResult.zone,
+    // Not an error — an expired card is still the best estimate available
+    // until a fresh one is entered, but the caller should flag it clearly.
+    expired,
+    expiryDate: card.expiryDate || null,
   };
 }
 
@@ -524,6 +649,7 @@ if (typeof window !== "undefined") {
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, defaultRateCards,
+    excelSerialToIsoDate, parseUsToGlobalRateSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
   };
@@ -536,6 +662,7 @@ if (typeof module !== "undefined") {
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, defaultRateCards,
+    excelSerialToIsoDate, parseUsToGlobalRateSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
   };

@@ -150,6 +150,70 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qNorway.error && close(qNorway.perParcelCost, 29.5), `DPD Non-UK Norway 0.51-1kg, got ${JSON.stringify(qNorway)}`);
 }
 
+// ---- parseUsToGlobalRateSheet: GPS-style "Destinations x weight-break"
+// international rate sheets, too large to hand-type or bake into source
+// (real cards run 40-190 countries x 60+ weight rows) — parsed from the
+// sheet's own layout at import time instead. Fixture mirrors the real
+// "IM8 ... GPS US2Global eCom Parcel Rate" sheet shape (see
+// ukRoyalMailCard() etc. for the equivalent small, hand-entered UK cards).
+{
+  const fixtureRows = [
+    [],
+    ["GPS International Priority Parcel - US Export"],
+    ["Effective Date: ", "", 45658],
+    ["Expired Date: ", "", 45930],
+    ["Currency: ", "", "USD"],
+    ["Destinations", "Canada", "United Kingdom"],
+    ["ISO", "CA", "GB"],
+    ["Terms", "DDP", "DDP"],
+    ["Dim Factor", 139, 139],
+    ["Minimum", 0, 0],
+    ["LB\\Transit Time", "5-8WD", "5-7WD"],
+    ["0.5", 8.3, 5],
+    [1, 8.97, 5.22],
+    [2, 10.15, 6.74],
+  ];
+  const { card, error } = taskG.parseUsToGlobalRateSheet(fixtureRows, { warehouseId: "US_GPS" });
+  assert(!error, `parse should succeed on a well-formed sheet, got error: ${error}`);
+  assert(card && card.zones.length === 2 && card.zones[0] === "Canada" && card.zones[1] === "United Kingdom", `zones from Destinations row, got ${JSON.stringify(card && card.zones)}`);
+  assert(card.countryZoneMap.Canada === "Canada", "countryZoneMap should be an identity map for a country-per-column sheet");
+  assert(card.dimDivisor === 139, `dimDivisor from Dim Factor row, got ${card.dimDivisor}`);
+  assert(card.effectiveDate === "2025-01-01", `effectiveDate from numeric Excel serial 45658, got ${card.effectiveDate}`);
+  assert(card.expiryDate === "2025-09-30", `expiryDate from numeric Excel serial 45930, got ${card.expiryDate}`);
+  assert(card.brackets.length === 3, `3 weight-break rows -> 3 brackets, got ${card.brackets.length}`);
+  assert(close(card.brackets[0].min, 0) && close(card.brackets[0].max, 0.5) && close(card.brackets[0].prices.Canada, 8.3), `first bracket, got ${JSON.stringify(card.brackets[0])}`);
+  assert(close(card.brackets[1].min, 0.51) && close(card.brackets[1].max, 1) && close(card.brackets[1].prices["United Kingdom"], 5.22), `second bracket, got ${JSON.stringify(card.brackets[1])}`);
+  assert(card.notes.includes("DDP") && card.notes.includes("2025-01-01"), `notes should carry terms + dates, got "${card.notes}"`);
+
+  // End-to-end: a 1lb shipment to Canada should land in the 0.51-1lb bracket.
+  const oneLbInKg = taskG.convertWeight(1, "lb", "kg");
+  const q = taskG.quoteFreight({ card, totalWeightKg: oneLbInKg, parcelCount: 1, dest: { country: "Canada" } });
+  assert(!q.error && close(q.perParcelCost, 8.97, 1e-6), `1lb to Canada should price the 0.51-1lb bracket, got ${JSON.stringify(q)}`);
+  assert(q.expired === true, "a card expired in 2025 should be flagged expired (test runs well after that)");
+
+  // The date value comes through as a JS Date object (not a raw serial)
+  // whenever the workbook is read with cellDates:true — which is exactly
+  // what the real app's io.loadWorkbook() does — so that path needs to
+  // work too, not just the raw-serial one exercised above.
+  const dateFixtureRows = fixtureRows.map((r) => r.slice());
+  dateFixtureRows[2] = ["Effective Date: ", "", new Date(Date.UTC(2025, 0, 1))];
+  dateFixtureRows[3] = ["Expired Date: ", "", new Date(Date.UTC(2025, 8, 30))];
+  const dateResult = taskG.parseUsToGlobalRateSheet(dateFixtureRows, { warehouseId: "US_GPS" });
+  assert(!dateResult.error && dateResult.card.effectiveDate === "2025-01-01" && dateResult.card.expiryDate === "2025-09-30",
+    `should parse Date-object date cells too, got ${JSON.stringify(dateResult)}`);
+
+  // A non-zero Minimum charge isn't applied automatically — should be
+  // called out in notes rather than silently dropped.
+  const minFixtureRows = fixtureRows.map((r) => r.slice());
+  minFixtureRows[9] = ["Minimum", 15, 15];
+  const minResult = taskG.parseUsToGlobalRateSheet(minFixtureRows, { warehouseId: "US_GPS" });
+  assert(!minResult.error && /minimum/i.test(minResult.card.notes), `non-zero Minimum row should be flagged in notes, got "${minResult.card && minResult.card.notes}"`);
+
+  // Missing the "Destinations" row entirely -> a clear error, not a throw.
+  const badResult = taskG.parseUsToGlobalRateSheet([["not a rate sheet"]], {});
+  assert(!!badResult.error, "a sheet with no Destinations row should error, not throw or silently return garbage");
+}
+
 if (!ok) {
   console.error("\nTASK G TEST FAILED");
   process.exit(1);
