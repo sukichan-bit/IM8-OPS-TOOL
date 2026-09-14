@@ -505,15 +505,18 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
 }
 
 // ---- Real Stord (USOPS-WH05) rate cards, from "IM8 2026 - STORD
-// 20251218.xlsx" (provided by the user 2026-09-11), "RATE CARD" tab —
-// 9 service cards + the existing blank USPS-zone card, seeded into BOTH
+// 20251218.xlsx" (provided by the user 2026-09-11) — 9 services from the
+// "RATE CARD" tab, plus 3 more international services (Standard DDP,
+// Expedited DDP, Standard DDU) from their own dedicated tabs added
+// specifically to make sure Canada is covered (2026-09-14), plus the
+// existing blank USPS-zone card — seeded into BOTH
 // defaultRateCards().US_STORD_ATL and .US_STORD_RNO (the sheet doesn't
 // distinguish an origin). ----
 {
   const defaults = taskG.defaultRateCards();
   for (const whId of ["US_STORD_ATL", "US_STORD_RNO"]) {
     const cards = defaults[whId];
-    assert(cards.length === 10, `${whId} should have 10 cards (9 real Stord services + the manual-entry USPS-zone card), got ${cards.length}: ${cards.map((c) => c.name).join(", ")}`);
+    assert(cards.length === 13, `${whId} should have 13 cards (9 RATE CARD services + 3 dedicated-tab international services + the manual-entry USPS-zone card), got ${cards.length}: ${cards.map((c) => c.name).join(", ")}`);
     assert(cards.filter((c) => c.name.startsWith("Stord")).every((c) => c.currency === "USD"), `${whId}'s Stord cards should be priced in USD`);
   }
 
@@ -538,6 +541,22 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   const qDdp = taskG.quoteFreight({ card: ddpAtl, totalWeightKg: taskG.convertWeight(5, "lb", "kg"), parcelCount: 1, dest: { country: "Australia" } });
   assert(!qDdp.error && close(qDdp.perParcelCost, 139.49), `Stord Priority DDP 5lb to Australia, got ${JSON.stringify(qDdp)}`);
   assert(!qDdp.expired, "the Stord rate card has no stated expiry date, so shouldn't be auto-flagged expired");
+
+  // Canada, specifically — the point of adding these 3 extra cards — must
+  // resolve on all three, at meaningfully different (tiered) prices, not
+  // just the one card RATE CARD already covered it on.
+  const standardDdp = defaults.US_STORD_ATL.find((c) => c.name.includes("Standard DDP"));
+  const qStdDdpCanada = taskG.quoteFreight({ card: standardDdp, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "Canada (Major)" } });
+  assert(!qStdDdpCanada.error && close(qStdDdpCanada.perParcelCost, 8.98), `Stord Standard DDP 1lb to Canada (Major), got ${JSON.stringify(qStdDdpCanada)}`);
+
+  const expeditedDdp = defaults.US_STORD_ATL.find((c) => c.name.includes("Expedited DDP"));
+  const qExpDdpCanada = taskG.quoteFreight({ card: expeditedDdp, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "Canada (Major)" } });
+  assert(!qExpDdpCanada.error && close(qExpDdpCanada.perParcelCost, 29.64), `Stord Expedited DDP 1lb to Canada (Major), got ${JSON.stringify(qExpDdpCanada)}`);
+
+  const standardDdu = defaults.US_STORD_ATL.find((c) => c.name.includes("Standard DDU"));
+  const qStdDduCanada = taskG.quoteFreight({ card: standardDdu, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "Canada (Major)" } });
+  assert(!qStdDduCanada.error && close(qStdDduCanada.perParcelCost, 14.07), `Stord Standard DDU 1lb to Canada (Major), got ${JSON.stringify(qStdDduCanada)}`);
+  assert(standardDdu.zones.every((z) => z.length > 3 || /^Canada/.test(z)), `Standard DDU zones should be full country names, not 2-letter codes, got a sample: ${JSON.stringify(standardDdu.zones.slice(0, 10))}`);
 }
 
 if (!ok) {
