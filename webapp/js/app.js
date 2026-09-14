@@ -133,13 +133,17 @@ function formatCellForDisplay(v) {
 }
 
 // rowClassFn(row, index) -> optional CSS class name (e.g. "row-red"/"row-green")
-function renderTable(rows, container, limit, rowClassFn) {
+// boldColumns (optional): column name(s) whose cell value should render
+// bold — e.g. Task A's "To produce", to stand out from the plain
+// Requested/On-hand qty columns it's derived from.
+function renderTable(rows, container, limit, rowClassFn, boldColumns) {
   container.innerHTML = "";
   if (!rows.length) {
     container.appendChild(h("p", { class: "muted", text: "(no rows)" }));
     return;
   }
   const columns = Object.keys(rows[0]).filter((c) => !c.startsWith("__"));
+  const boldSet = new Set(boldColumns || []);
   const shown = limit ? rows.slice(0, limit) : rows;
   const table = h("table", { class: "data-table" });
   const thead = h("thead", {}, [h("tr", {}, columns.map((c) => h("th", { text: c })))]);
@@ -151,7 +155,11 @@ function renderTable(rows, container, limit, rowClassFn) {
       return h(
         "tr",
         cls ? { class: cls } : {},
-        columns.map((c) => h("td", { text: formatCellForDisplay(row[c]) }))
+        columns.map((c) =>
+          boldSet.has(c)
+            ? h("td", {}, [h("strong", { text: formatCellForDisplay(row[c]) })])
+            : h("td", { text: formatCellForDisplay(row[c]) })
+        )
       );
     })
   );
@@ -616,7 +624,7 @@ function renderTaskA() {
 
       const tblContainer = h("div", {});
       tablesArea.appendChild(tblContainer);
-      renderTable(table, tblContainer, 200, taskARowClass);
+      renderTable(table, tblContainer, 200, taskARowClass, ["To produce"]);
     }
   }
   showAllCb.addEventListener("change", recompute);
