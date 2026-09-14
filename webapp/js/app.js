@@ -3125,7 +3125,7 @@ function renderTaskGComparisonTable(container, results) {
 }
 
 function computeTaskGQuote() {
-  const resultBox = document.getElementById("g-quote-result");
+  const resultBox = document.getElementById("g-quote-results");
   resultBox.innerHTML = "";
 
   taskGState.destination.country = document.getElementById("g-dest-country").value.trim();
@@ -3659,6 +3659,7 @@ function init() {
     document.getElementById(id).addEventListener("input", renderTaskGOrderSummary);
   });
   document.getElementById("g-calc-btn").addEventListener("click", computeTaskGQuote);
+  ops2InitEmptyState("tab-g");
 
   renderTaskA();
   renderTaskB();

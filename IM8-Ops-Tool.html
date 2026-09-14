@@ -1162,7 +1162,6 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
 
       <h6 class="ops2-step">4 · Calculate</h6>
       <button type="button" class="run-btn" id="g-calc-btn">Calculate freight cost</button>
-      <div id="g-quote-result"></div>
 
       <hr class="ops2-hr">
       <details class="task-detail"><summary>Product catalogue (edit defaults, add new products)</summary>
@@ -1182,6 +1181,7 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
           <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">A full warehouse comparison, cheapest highlighted, when comparing all</span></div>
         </div>
       </div>
+      <div id="g-quote-results"></div>
     </section>
   </div>
 </div>
@@ -9284,7 +9284,7 @@ function renderTaskGComparisonTable(container, results) {
 }
 
 function computeTaskGQuote() {
-  const resultBox = document.getElementById("g-quote-result");
+  const resultBox = document.getElementById("g-quote-results");
   resultBox.innerHTML = "";
 
   taskGState.destination.country = document.getElementById("g-dest-country").value.trim();
@@ -9818,6 +9818,7 @@ function init() {
     document.getElementById(id).addEventListener("input", renderTaskGOrderSummary);
   });
   document.getElementById("g-calc-btn").addEventListener("click", computeTaskGQuote);
+  ops2InitEmptyState("tab-g");
 
   renderTaskA();
   renderTaskB();
