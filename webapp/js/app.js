@@ -576,7 +576,7 @@ function renderTaskA() {
     const showAllRows = showAllCb.checked;
     const { perWarehouse, diagnostics } = computeProductionRequirement(
       filteredRows, onhand.rows, requested.colMap, onhand.colMap, showAllRows,
-      onorder ? onorder.rows : null, onorder ? onorder.colMap : null, itemMasterState.map
+      onorder ? onorder.rows : null, onorder ? onorder.colMap : null, itemMasterState.map, requested.nameMap
     );
     diagBox.querySelector(".diagnostics").textContent = JSON.stringify(diagnostics, null, 2);
 
@@ -675,7 +675,14 @@ async function tryLoadTaskARequestedPivot(container, file) {
     })
   );
 
-  return { rows, colMap: { item: "Item number", warehouse: "Warehouse", qty: "Quantity", remarks: null }, getMissing: () => [], onChange: null };
+  const nameMap = taskA.extractItemNameMapFromWorkbook(wb);
+  if (Object.keys(nameMap).length) {
+    container.appendChild(
+      h("p", { class: "caption", text: `Also found ${Object.keys(nameMap).length} Item→Product name mapping(s) elsewhere in this workbook — used to fill in Product name for items with zero on-hand rows.` })
+    );
+  }
+
+  return { rows, colMap: { item: "Item number", warehouse: "Warehouse", qty: "Quantity", remarks: null }, getMissing: () => [], onChange: null, nameMap };
 }
 
 async function handleTaskAFile(kind, file) {

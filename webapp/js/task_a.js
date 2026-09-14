@@ -52,10 +52,14 @@ function isBlank(v) {
 // onorderRows/onorderCols: optional D365 on-order (incoming/in-production)
 // export — {item, warehouse, qty} — added to on-hand when computing To
 // produce, so already-incoming stock isn't double-counted as a shortfall.
-// Omit both to keep the plain Requested-vs-On-hand behavior. itemMaster:
-// optional {item: productName} lookup (e.g. a saved Released-Items master)
-// used only to backfill Product name for SKUs missing one from on-hand.
-function computeProductionRequirement(requestedRows, onhandRows, requestedCols, onhandCols, showAllRows, onorderRows, onorderCols, itemMaster) {
+// Omit both to keep the plain Requested-vs-On-hand behavior. extraNameMap:
+// optional {item: productName} auto-extracted from another flat sheet in
+// the same requested-inventory workbook (e.g. a full "SO" tab) — covers
+// SKUs with zero on-hand rows, which the on-hand file itself can never
+// name. itemMaster: optional {item: productName} lookup (e.g. a saved
+// Released-Items master) used only to backfill Product name for SKUs
+// still missing one after the above.
+function computeProductionRequirement(requestedRows, onhandRows, requestedCols, onhandCols, showAllRows, onorderRows, onorderCols, itemMaster, extraNameMap) {
   const diagnostics = {};
   const haveOnorder = !!(onorderRows && onorderCols);
   diagnostics.requested_rows_in = requestedRows.length;
@@ -124,7 +128,12 @@ function computeProductionRequirement(requestedRows, onhandRows, requestedCols, 
     // Incoming/in-production qty beyond what's needed for the currently-known
     // shortfall — a potential over-ordering signal, not itself a shortfall.
     const extraOnOrder = haveOnorder ? Math.max(onorder - toProduce, 0) : 0;
-    const productName = (hasProductName && productNames.get(item)) || KNOWN_NAME_OVERRIDES[item] || (itemMaster && itemMaster[item]) || "";
+    const productName =
+      (hasProductName && productNames.get(item)) ||
+      (extraNameMap && extraNameMap[item]) ||
+      KNOWN_NAME_OVERRIDES[item] ||
+      (itemMaster && itemMaster[item]) ||
+      "";
     merged.push({
       item,
       warehouse,
@@ -275,12 +284,54 @@ function pivotToFlatRequestedRows(pivot) {
   return rows;
 }
 
+// ---------- Item -> Product name backfill from another flat sheet ----------
+
+// Scans every sheet in a workbook for one with BOTH an Item-number-like
+// and a Product-name-like column (e.g. a full "SO" tab listing every line
+// ever ordered, present in the same workbook as the Action-tab pivot
+// above) and merges them into one {item: productName} map — a free,
+// comprehensive name source straight from data the user already
+// uploaded, so a SKU with zero rows in the on-hand export (which can
+// never carry its own name) still shows its real Product name instead of
+// a blank cell. First sheet to name a given item wins; a sheet that
+// doesn't have both columns (or fails to parse) is just skipped, never
+// throws.
+function extractItemNameMapFromWorkbook(wb) {
+  const map = {};
+  const sheets = io.listSheets(wb) || [];
+  for (const sheetName of sheets) {
+    let rows;
+    try {
+      const raw = io.sheetToRawRows(wb, sheetName, 15);
+      const guess = io.guessHeaderRowAndScore(raw, { item: ["item number", "sku"], name: ["product name"] });
+      rows = io.loadTableFromSheet(wb, sheetName, guess.row);
+    } catch (e) {
+      continue;
+    }
+    if (!rows.length) continue;
+    const cols = Object.keys(rows[0]);
+    const itemCol = io.fuzzyMatchColumn(cols, ["item number", "sku"]);
+    const nameCol = io.fuzzyMatchColumn(cols, ["product name"]);
+    if (!itemCol || !nameCol) continue;
+    for (const r of rows) {
+      const item = r[itemCol];
+      const name = r[nameCol];
+      if (item == null || String(item).trim() === "") continue;
+      if (name == null || String(name).trim() === "") continue;
+      const key = String(item).trim();
+      if (!map[key]) map[key] = String(name).trim();
+    }
+  }
+  return map;
+}
+
 if (typeof window !== "undefined") {
   window.taskA = {
     ...(window.taskA || {}),
     computeProductionRequirement,
     extractItemWarehousePivot,
     pivotToFlatRequestedRows,
+    extractItemNameMapFromWorkbook,
   };
 }
 
@@ -288,5 +339,11 @@ if (typeof module !== "undefined") {
   const skuRules = require("./sku_rules");
   global.normalizeSku = skuRules.normalizeSku;
   global.isExcludedSku = skuRules.isExcludedSku;
-  module.exports = { computeProductionRequirement, extractItemWarehousePivot, pivotToFlatRequestedRows };
+  global.io = require("./io_utils");
+  module.exports = {
+    computeProductionRequirement,
+    extractItemWarehousePivot,
+    pivotToFlatRequestedRows,
+    extractItemNameMapFromWorkbook,
+  };
 }
