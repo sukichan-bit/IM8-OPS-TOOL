@@ -749,6 +749,76 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(unresolved.every((r) => r.error || r.quoteRequired), "every non-priced result should carry an error or quoteRequired reason, not just disappear");
 }
 
+// ---- Bracket row perKg flag (synthetic card, isolated) ----
+{
+  const card = taskG.emptyManualCard("HK", "perKg test card", "kg", "cm");
+  card.zones = ["Z1"];
+  card.brackets = [
+    { min: 0, max: 10, prices: { Z1: 50 } }, // normal flat bracket, unaffected by perKg support
+    { min: 10.01, max: 99999, prices: { Z1: 4 }, perKg: true }, // rate-per-kg bracket
+  ];
+  const flat = taskG.priceForZone(card, "Z1", 5);
+  assert(!flat.error && close(flat.price, 50), `flat bracket row should be unaffected by perKg support, got ${JSON.stringify(flat)}`);
+  const perKg = taskG.priceForZone(card, "Z1", 20);
+  assert(!perKg.error && close(perKg.price, 80), `perKg row should price as rate x weight (4 x 20 = 80), got ${JSON.stringify(perKg)}`);
+  const perKgFraction = taskG.priceForZone(card, "Z1", 12.5);
+  assert(!perKgFraction.error && close(perKgFraction.price, 50), `perKg row with a fractional weight (4 x 12.5 = 50), got ${JSON.stringify(perKgFraction)}`);
+}
+
+// ---- HK (OPS-WH01) real FedEx Export cards ----
+{
+  const defaults = taskG.defaultRateCards();
+  assert(defaults.HK.length === 3, `defaultRateCards().HK should hold the 3 real FedEx cards, got ${defaults.HK.map((c) => c.name).join(", ")}`);
+  const ipe = defaults.HK.find((c) => c.name.includes("IPE"));
+  const ip = defaults.HK.find((c) => c.name.includes("IP (Priority)"));
+  const ie = defaults.HK.find((c) => c.name.includes("IE (Economy)"));
+  assert(!!ipe && !!ip && !!ie, `HK should have IPE, IP and IE cards, got ${defaults.HK.map((c) => c.name).join(", ")}`);
+
+  // Spot checks manually verified against the source PDF (pdftotext -table
+  // pages 4-6): IPE Package table.
+  const r1 = taskG.priceForZone(ipe, "1", 3.0);
+  assert(!r1.error && close(r1.price, 1081.2), `IPE zone 1 @ 3.0kg should be HKD 1,081.20, got ${JSON.stringify(r1)}`);
+  const r2 = taskG.priceForZone(ipe, "J", 3.0);
+  assert(!r2.error && close(r2.price, 514.08), `IPE zone J @ 3.0kg should be HKD 514.08, got ${JSON.stringify(r2)}`);
+  const r3 = taskG.priceForZone(ipe, "U", 30);
+  assert(!r3.error && close(r3.price, 4735.2), `IPE zone U per-kg band (21.0-44.0, 157.84/kg x 30kg) should be HKD 4,735.20, got ${JSON.stringify(r3)}`);
+  // Top per-kg band (1,000.0 - 99,999.0): zone E is 144.80/kg (NOT zone 1,
+  // which is 146.48/kg for that same row — see the discrepancy note in the
+  // final report/commit message: the "zone 1 = 144.80/kg" spot check from
+  // the task brief doesn't match the raw PDF text under the validated
+  // column ordering, which 3 other spot checks (above) confirm is correct;
+  // 144.80/kg is zone E's (and, in the K-T zone group table, zone K's) rate
+  // on that row.
+  const r4 = taskG.priceForZone(ipe, "E", 1500);
+  assert(!r4.error && close(r4.price, 1500 * 144.8), `IPE zone E top per-kg band (144.80/kg x 1500kg), got ${JSON.stringify(r4)}`);
+
+  // End-to-end via quoteFreight (manual zone override).
+  const q1 = taskG.quoteFreight({ card: ipe, totalWeightKg: 3.0, parcelCount: 1, dest: { zone: "1" } });
+  assert(!q1.error && close(q1.perParcelCost, 1081.2) && close(q1.totalCost, 1081.2), `quoteFreight IPE zone 1 @ 3kg, got ${JSON.stringify(q1)}`);
+
+  // Country -> zone lookup, one per service (cross-checked against the raw
+  // Export Zone Chart text, pp. 20-24).
+  assert(taskG.findCountryZone(ipe.countryZoneMap, "Australia") === "U", `IPE Australia should map to zone U, got ${taskG.findCountryZone(ipe.countryZoneMap, "Australia")}`);
+  assert(taskG.findCountryZone(ip.countryZoneMap, "Austria") === "M", `IP Austria should map to zone M, got ${taskG.findCountryZone(ip.countryZoneMap, "Austria")}`);
+  assert(taskG.findCountryZone(ie.countryZoneMap, "Argentina") === "G", `IE Argentina should map to zone G, got ${taskG.findCountryZone(ie.countryZoneMap, "Argentina")}`);
+  // A country IE doesn't serve (blank cell on the source rate sheet) must
+  // be omitted from IE's map, not guessed — but IP/IPE do serve it.
+  assert(taskG.findCountryZone(ie.countryZoneMap, "Democratic Republic of the Congo") === null, "IE should not have a zone for a country it doesn't serve");
+  assert(taskG.findCountryZone(ip.countryZoneMap, "Democratic Republic of the Congo") === "H", "IP should map Democratic Republic of the Congo to zone H");
+
+  // resolveZone() end to end via country, through the real card.
+  const zoneResult = taskG.resolveZone(ie, { country: "australia" }); // case-insensitive
+  assert(!zoneResult.error && zoneResult.zone === "U" && zoneResult.autoDetected === true, `resolveZone by country on the real IE card, got ${JSON.stringify(zoneResult)}`);
+
+  // Every card should use FedEx's own volumetric divisor and be marked as
+  // effectively unlimited (no splitting needed).
+  for (const c of [ipe, ip, ie]) {
+    assert(c.dimDivisor === 5000, `${c.name} should use dimDivisor 5000, got ${c.dimDivisor}`);
+    assert(c.splitAllowed === false, `${c.name} should have splitAllowed false, got ${c.splitAllowed}`);
+    assert(c.currency === "HKD" && c.mode === "bracket" && c.zoneSource === "manual", `${c.name} basic card shape, got currency=${c.currency} mode=${c.mode} zoneSource=${c.zoneSource}`);
+  }
+}
+
 if (!ok) {
   console.error("\nTASK G TEST FAILED");
   process.exit(1);
