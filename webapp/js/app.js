@@ -2745,11 +2745,47 @@ function saveFreightRateCardsToStorage(cards) {
   }
 }
 
+// The product catalog is likewise the user's own data (dimensions in cm,
+// weight in kg) — persisted the same way as the rate cards, seeded with
+// the 7 real IM8 products so a fresh browser still has something usable.
+const FREIGHT_PRODUCT_CATALOG_STORAGE_KEY = "im8OpsToolFreightProductCatalogV1";
+
+function loadFreightProductCatalogFromStorage() {
+  try {
+    const raw = localStorage.getItem(FREIGHT_PRODUCT_CATALOG_STORAGE_KEY);
+    if (!raw) return taskG.defaultProductCatalog();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length ? parsed : taskG.defaultProductCatalog();
+  } catch (e) {
+    return taskG.defaultProductCatalog();
+  }
+}
+function saveFreightProductCatalogToStorage(products) {
+  try {
+    localStorage.setItem(FREIGHT_PRODUCT_CATALOG_STORAGE_KEY, JSON.stringify(products));
+  } catch (e) {
+    // Storage disabled/full — still works for this page load.
+  }
+}
+
 const taskGState = {
   rateCards: loadFreightRateCardsFromStorage(),
+  products: loadFreightProductCatalogFromStorage(),
   warehouseId: taskG.FREIGHT_WAREHOUSES[0].id,
   rateCardId: null,
-  dest: {}, // { country } and/or { zone } and/or { zip }, depending on the card's zone source
+  compareAll: false,
+  // The unified destination — one country/ZIP pair used for every card,
+  // regardless of that card's own zone system (country lookup, USPS
+  // auto-zone, or a single fixed zone). zoneOverride is a manual pick
+  // that always wins over auto-detection when set (see resolveZone());
+  // blank means "let the card auto-detect".
+  destination: { country: "", zip: "" },
+  zoneOverride: "",
+  // Ordered quantities, keyed by product id — session-only, like the old
+  // weight/parcel inputs were (a specific customer order isn't something
+  // to remember across page loads the way rate cards/products are).
+  quantities: {},
+  cartonOverride: { lengthCm: null, widthCm: null, heightCm: null, grossWeightKg: null, cartons: 1 },
 };
 
 function taskGCurrentCards() {
@@ -2828,6 +2864,19 @@ function renderTaskGRateCardSelect() {
   if (taskGState.rateCardId) select.value = taskGState.rateCardId;
 }
 
+// The destination itself (country + ZIP) is unified and top-level (see
+// #g-dest-country/#g-dest-zip in the template) — the same pair feeds
+// every card's own zone resolution, whatever that card's zone system is.
+// This just builds the { country, zone, zip } dest object resolveZone()
+// expects, adding the manual override (if any) on top.
+function taskGDest() {
+  return { country: taskGState.destination.country, zip: taskGState.destination.zip, zone: taskGState.zoneOverride || undefined };
+}
+
+// Renders the CURRENT card's zone resolution status (auto-detected /
+// manual override / ambiguous / error) plus an "override zone" dropdown —
+// never silently assumes a zone the way a bare lookup would; a manual
+// pick is always available and always clearly labelled once used.
 function renderTaskGDest() {
   const box = document.getElementById("g-dest");
   box.innerHTML = "";
@@ -2837,108 +2886,275 @@ function renderTaskGDest() {
     return;
   }
 
-  if (card.zoneSource === "usps") {
-    const wh = taskG.getWarehouse(card.warehouseId);
+  const result = taskG.resolveZone(card, taskGDest());
+  if (result.error) {
+    box.appendChild(h("p", { class: "error", text: result.error }));
+  } else {
+    const how = result.manualOverride ? "Manual override" : result.autoDetected ? "Auto-detected" : "Default";
+    const rawNote = result.raw && result.raw !== result.zone ? ` (chart shows "${result.raw}")` : "";
+    box.appendChild(h("p", { class: "caption", text: `${how} zone for "${card.name}": ${result.zone}${rawNote}.` }));
+  }
+
+  if (card.zones.length > 1) {
     const wrap = h("div", { class: "col-field" });
-    wrap.appendChild(h("label", { text: "Destination ZIP code (US)" }));
-    const input = h("input", { type: "text", placeholder: "e.g. 90210" });
-    input.value = taskGState.dest.zip || "";
-    const info = h("p", { class: "caption" });
-    const updateInfo = () => {
-      const z = taskG.lookupUspsZone(wh.uspsOriginZip3, input.value);
-      if (z.error) {
-        info.textContent = input.value.trim() ? z.error : "";
-        info.className = input.value.trim() ? "error" : "caption";
-      } else {
-        info.textContent = `USPS Zone ${z.zone}${z.raw !== z.zone ? ` (chart shows "${z.raw}")` : ""} from ${wh.name}.`;
-        info.className = "caption";
-      }
-    };
-    input.addEventListener("input", () => { taskGState.dest = { zip: input.value.trim() }; updateInfo(); });
-    wrap.appendChild(input);
+    wrap.appendChild(h("label", { text: "Override zone (optional — leave blank to auto-detect)" }));
+    const select = h("select", {});
+    select.appendChild(h("option", { value: "", text: "(auto-detect)" }));
+    card.zones.forEach((z) => select.appendChild(h("option", { value: z, text: z })));
+    select.value = taskGState.zoneOverride || "";
+    select.addEventListener("change", () => { taskGState.zoneOverride = select.value; renderTaskGDest(); });
+    wrap.appendChild(select);
     box.appendChild(wrap);
-    box.appendChild(info);
-    updateInfo();
-    return;
   }
-
-  if (card.zones.length === 1) {
-    taskGState.dest = { zone: card.zones[0] };
-    box.appendChild(h("p", { class: "caption", text: `Single rate zone: ${card.zones[0]}.` }));
-    return;
-  }
-
-  const countries = Object.keys(card.countryZoneMap);
-  const grid = h("div", { class: "col-grid" });
-  if (countries.length) {
-    const cWrap = h("div", { class: "col-field" });
-    cWrap.appendChild(h("label", { text: "Destination country" }));
-    const cSelect = h("select", {});
-    countries.forEach((c) => cSelect.appendChild(h("option", { value: c, text: `${c} → ${card.countryZoneMap[c]}` })));
-    cSelect.addEventListener("change", () => { taskGState.dest = { country: cSelect.value }; });
-    taskGState.dest = { country: cSelect.value };
-    cWrap.appendChild(cSelect);
-    grid.appendChild(cWrap);
-  }
-  const zWrap = h("div", { class: "col-field" });
-  zWrap.appendChild(h("label", { text: countries.length ? "...or pick a zone directly" : "Destination zone" }));
-  const zSelect = h("select", {});
-  if (countries.length) zSelect.appendChild(h("option", { value: "", text: "(use country above)" }));
-  card.zones.forEach((z) => zSelect.appendChild(h("option", { value: z, text: z })));
-  zSelect.addEventListener("change", () => { if (zSelect.value) taskGState.dest = { zone: zSelect.value }; });
-  zWrap.appendChild(zSelect);
-  grid.appendChild(zWrap);
-  box.appendChild(grid);
 }
 
-function renderTaskGWeightConverted() {
-  const kgInput = document.getElementById("g-weight-kg");
-  const caption = document.getElementById("g-weight-converted");
-  const kg = parseFloat(kgInput.value);
-  if (!kg || kg <= 0) { caption.textContent = ""; return; }
-  const lb = taskG.convertWeight(kg, "kg", "lb");
-  const oz = taskG.convertWeight(kg, "kg", "oz");
-  caption.textContent = `= ${lb.toFixed(2)} lb = ${oz.toFixed(1)} oz`;
+// ---- Product catalogue ----
+
+function renderTaskGProductCatalogEditor() {
+  const root = document.getElementById("g-product-catalog-editor");
+  if (!root) return;
+  root.innerHTML = "";
+  root.appendChild(h("p", { class: "caption", text: "Dimensions in cm, weight in kg. Saved in this browser and used to estimate shipment weight from ordered quantities below." }));
+
+  const table = h("table", { class: "data-table" });
+  const thead = h("thead", {}, [h("tr", {}, [
+    h("th", { text: "Product" }), h("th", { text: "Length (cm)" }), h("th", { text: "Width (cm)" }),
+    h("th", { text: "Height (cm)" }), h("th", { text: "Weight (kg)" }), h("th", { text: "" }),
+  ])]);
+  const tbody = h("tbody", {});
+  taskGState.products.forEach((p) => {
+    const tr = h("tr", {});
+    const nameInput = h("input", { type: "text" });
+    nameInput.value = p.name;
+    nameInput.addEventListener("change", () => { p.name = nameInput.value.trim() || p.name; saveFreightProductCatalogToStorage(taskGState.products); renderTaskGOrderTable(); });
+    tr.appendChild(h("td", {}, [nameInput]));
+    for (const field of ["lengthCm", "widthCm", "heightCm", "weightKg"]) {
+      const input = h("input", { type: "number", min: "0", step: "0.01" });
+      input.value = p[field];
+      input.addEventListener("change", () => { p[field] = parseFloat(input.value) || 0; saveFreightProductCatalogToStorage(taskGState.products); renderTaskGOrderSummary(); });
+      tr.appendChild(h("td", {}, [input]));
+    }
+    const rmBtn = h("button", { class: "clear-btn", text: "Remove" });
+    rmBtn.addEventListener("click", () => {
+      taskGState.products = taskGState.products.filter((x) => x.id !== p.id);
+      delete taskGState.quantities[p.id];
+      saveFreightProductCatalogToStorage(taskGState.products);
+      renderTaskGProductCatalogEditor();
+      renderTaskGOrderTable();
+    });
+    tr.appendChild(h("td", {}, [rmBtn]));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(thead);
+  table.appendChild(tbody);
+  root.appendChild(table);
+
+  const addBtn = h("button", { class: "clear-btn", text: "+ Add product" });
+  addBtn.addEventListener("click", () => {
+    taskGState.products.push(taskG.emptyProduct());
+    saveFreightProductCatalogToStorage(taskGState.products);
+    renderTaskGProductCatalogEditor();
+    renderTaskGOrderTable();
+  });
+  root.appendChild(addBtn);
+}
+
+// ---- Order (ordered quantities -> estimated shipment weight) ----
+
+function renderTaskGOrderTable() {
+  const root = document.getElementById("g-order-table");
+  if (!root) return;
+  root.innerHTML = "";
+  const table = h("table", { class: "data-table" });
+  const thead = h("thead", {}, [h("tr", {}, [
+    h("th", { text: "Product" }), h("th", { text: "L × W × H (cm)" }), h("th", { text: "Weight (kg)" }), h("th", { text: "Quantity" }),
+  ])]);
+  const tbody = h("tbody", {});
+  taskGState.products.forEach((p) => {
+    const tr = h("tr", {});
+    tr.appendChild(h("td", { text: p.name }));
+    tr.appendChild(h("td", { text: `${p.lengthCm} × ${p.widthCm} × ${p.heightCm}` }));
+    tr.appendChild(h("td", { text: String(p.weightKg) }));
+    const qtyInput = h("input", { type: "number", min: "0", step: "1" });
+    qtyInput.value = taskGState.quantities[p.id] || 0;
+    qtyInput.addEventListener("input", () => {
+      taskGState.quantities[p.id] = parseInt(qtyInput.value, 10) || 0;
+      renderTaskGOrderSummary();
+    });
+    tr.appendChild(h("td", {}, [qtyInput]));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(thead);
+  table.appendChild(tbody);
+  root.appendChild(table);
+  if (!taskGState.products.length) root.appendChild(h("p", { class: "warning", text: "No products in the catalogue yet — add one below." }));
+}
+
+function taskGReadCartonOverride() {
+  const val = (id) => { const v = parseFloat(document.getElementById(id).value); return v > 0 ? v : null; };
+  taskGState.cartonOverride = {
+    lengthCm: val("g-carton-l"), widthCm: val("g-carton-w"), heightCm: val("g-carton-h"),
+    grossWeightKg: val("g-carton-weight"), cartons: parseInt(document.getElementById("g-carton-count").value, 10) || 1,
+  };
+  return taskGState.cartonOverride;
+}
+
+function taskGResolveShipment() {
+  return taskG.resolveShipmentWeight({ products: taskGState.products, quantities: taskGState.quantities, cartonOverride: taskGReadCartonOverride() });
+}
+
+const TASK_G_WEIGHT_SOURCE_LABEL = {
+  catalog: "estimated from ordered quantities (product-catalogue volume/weight)",
+  mixed: "partly overridden by real carton dimensions/weight, partly estimated",
+  override: "real outer-carton dimensions and gross weight (measured, not estimated)",
+};
+
+function renderTaskGOrderSummary() {
+  const root = document.getElementById("g-order-summary");
+  if (!root) return;
+  root.innerHTML = "";
+  const shipment = taskGResolveShipment();
+  const cat = shipment.catalog;
+  root.appendChild(h("p", { class: "caption", text:
+    `Actual weight: ${cat.totalActualKg.toFixed(2)} kg  ·  Estimated volumetric weight: ${cat.volumetricKg.toFixed(2)} kg (${cat.totalVolumeCm3.toFixed(0)} cm³ ÷ 5000)  ·  Chargeable weight: ${cat.chargeableKg.toFixed(2)} kg` }));
+  root.appendChild(h("p", { class: "caption", text: `Weight source for this calculation: ${TASK_G_WEIGHT_SOURCE_LABEL[shipment.source]} — total ${shipment.totalWeightKg.toFixed(2)} kg across ${shipment.parcelCount} carton(s).` }));
+}
+
+// ---- Calculate: single warehouse, or compare all applicable warehouses ----
+
+function fmtMoneyFor(currency) {
+  return (amount) => `${amount.toFixed(2)}${currency ? " " + currency : ""}`;
+}
+
+// Renders one quote's full breakdown (weight, zone, bracket/split, cost,
+// surcharges, assumptions) into `container` — shared by the single-
+// warehouse view and each row's detail in the comparison view.
+function renderQuoteBreakdown(container, quote, card, warehouseName) {
+  const fmtMoney = fmtMoneyFor(quote.currency);
+  if (warehouseName) container.appendChild(h("p", { class: "info", text: `${warehouseName} — ${card.name}` }));
+  if (quote.expired) {
+    container.appendChild(h("p", { class: "warning", text: `⚠ This rate card expired on ${quote.expiryDate} — confirm current pricing before quoting a customer.` }));
+  }
+  const zoneHow = quote.zoneManualOverride ? "manual override" : quote.zoneAutoDetected ? "auto-detected" : "zone";
+  const rawNote = quote.zoneRaw && quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : "";
+  container.appendChild(h("p", { class: "info", text: `Origin: ${card.warehouseId}. Zone (${zoneHow}): ${quote.zone}${rawNote}.` }));
+
+  if (quote.quoteRequired) {
+    container.appendChild(h("p", { class: "error", text: `Quote required — ${quote.reason}` }));
+    return;
+  }
+
+  container.appendChild(h("p", { class: "info", text:
+    `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
+
+  if (quote.split) {
+    container.appendChild(h("p", { class: "warning", text: "⚠ Estimate only — this shipment exceeds the rate card's maximum and has been split into separately-rated consignments by weight; confirm actual packing before quoting a customer." }));
+    const splitTable = h("table", { class: "data-table" });
+    splitTable.appendChild(h("thead", {}, [h("tr", {}, [h("th", { text: "Consignment" }), h("th", { text: `Weight (${quote.weightUnit})` }), h("th", { text: "Cost" })])]));
+    const splitBody = h("tbody", {});
+    quote.split.forEach((c, i) => {
+      splitBody.appendChild(h("tr", {}, [
+        h("td", { text: `#${i + 1}` }), h("td", { text: c.weight.toFixed(2) }), h("td", { text: fmtMoney(c.cost) }),
+      ]));
+    });
+    splitTable.appendChild(splitBody);
+    container.appendChild(splitTable);
+  } else {
+    const surchargeParts = [];
+    if (quote.percentSurcharge) surchargeParts.push(`+ ${(quote.percentSurcharge * 100).toFixed(2)}% fuel/surcharge ${fmtMoney(quote.percentAmount)}`);
+    if (quote.flatSurcharge) surchargeParts.push(`+ flat surcharge ${fmtMoney(quote.flatSurcharge)}`);
+    const surchargeNote = surchargeParts.length ? ` (rate ${fmtMoney(quote.baseCost)} ${surchargeParts.join(" ")})` : "";
+    container.appendChild(h("p", { class: "info", text: `Per-parcel cost: ${fmtMoney(quote.perParcelCost)}${surchargeNote}` }));
+  }
+
+  const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${fmtMoney(quote.totalCost)}` });
+  totalP.style.fontSize = "1.25rem";
+  totalP.style.fontWeight = "800";
+  container.appendChild(totalP);
+  if (card.notes) container.appendChild(h("p", { class: "caption", text: `Rate card notes (surcharges/exclusions): ${card.notes}` }));
+}
+
+function renderTaskGComparisonTable(container, results) {
+  container.appendChild(h("p", { class: "caption", text:
+    "Cheapest priced quote highlighted. Currencies aren't converted — only compare rows in the same currency directly." }));
+  const table = h("table", { class: "data-table" });
+  table.appendChild(h("thead", {}, [h("tr", {}, [
+    h("th", { text: "Warehouse" }), h("th", { text: "Rate card" }), h("th", { text: "Zone" }), h("th", { text: "Chargeable weight" }),
+    h("th", { text: "Cost" }), h("th", { text: "Notes" }),
+  ])]));
+  const tbody = h("tbody", {});
+  // A resolved cost of exactly 0 (no surcharges either) almost always
+  // means the rate card was never filled in, not a genuinely free
+  // shipment — real quote or not, it must never win "cheapest".
+  const isUnfilled = (r) => typeof r.totalCost === "number" && r.totalCost === 0 && !r.percentAmount && !r.flatSurcharge;
+  const cheapestByCurrency = {};
+  for (const r of results) {
+    if (typeof r.totalCost !== "number" || isUnfilled(r)) continue;
+    if (cheapestByCurrency[r.currency] == null || r.totalCost < cheapestByCurrency[r.currency]) cheapestByCurrency[r.currency] = r.totalCost;
+  }
+  for (const r of results) {
+    const isCheapest = typeof r.totalCost === "number" && !isUnfilled(r) && r.totalCost === cheapestByCurrency[r.currency];
+    const tr = h("tr", isCheapest ? { class: "row-green" } : {});
+    tr.appendChild(h("td", { text: r.warehouseName }));
+    tr.appendChild(h("td", { text: r.cardName }));
+    if (r.error) {
+      tr.appendChild(h("td", { text: "—" }));
+      tr.appendChild(h("td", { text: "—" }));
+      tr.appendChild(h("td", { text: "—" }));
+      tr.appendChild(h("td", { class: "error", text: r.error }));
+    } else if (r.quoteRequired) {
+      tr.appendChild(h("td", { text: r.zone || "—" }));
+      tr.appendChild(h("td", { text: `${r.perParcelWeight.toFixed(2)} ${r.weightUnit}` }));
+      tr.appendChild(h("td", { text: "Quote required" }));
+      tr.appendChild(h("td", { text: r.reason }));
+    } else {
+      const fmtMoney = fmtMoneyFor(r.currency);
+      tr.appendChild(h("td", { text: `${r.zone}${r.zoneManualOverride ? " (manual)" : r.zoneAutoDetected ? " (auto)" : ""}` }));
+      tr.appendChild(h("td", { text: `${r.perParcelWeight.toFixed(2)} ${r.weightUnit}${r.parcelCount > 1 ? ` × ${r.parcelCount}` : ""}` }));
+      tr.appendChild(h("td", { text: fmtMoney(r.totalCost) }));
+      const notes = [];
+      if (isUnfilled(r)) notes.push("rate card appears blank/unfilled — $0.00 isn't a real quote");
+      if (r.split) notes.push("split into multiple consignments — estimate pending packing confirmation");
+      if (r.expired) notes.push("rate card expired");
+      tr.appendChild(h("td", { text: notes.join("; ") || "" }));
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  container.appendChild(table);
 }
 
 function computeTaskGQuote() {
   const resultBox = document.getElementById("g-quote-result");
   resultBox.innerHTML = "";
+
+  taskGState.destination.country = document.getElementById("g-dest-country").value.trim();
+  taskGState.destination.zip = document.getElementById("g-dest-zip").value.trim();
+  const shipment = taskGResolveShipment();
+  if (!(shipment.totalWeightKg > 0)) {
+    resultBox.appendChild(h("p", { class: "error", text: "Enter at least one ordered quantity, or a real carton gross weight, before calculating." }));
+    return;
+  }
+
+  if (taskGState.compareAll) {
+    const results = taskG.compareWarehouseQuotes({
+      rateCards: taskGState.rateCards, totalWeightKg: shipment.totalWeightKg, parcelCount: shipment.parcelCount,
+      dims: shipment.dims, dest: taskGDest(),
+    });
+    resultBox.appendChild(h("p", { class: "caption", text:
+      `Weight used: ${shipment.totalWeightKg.toFixed(2)} kg across ${shipment.parcelCount} carton(s) (${TASK_G_WEIGHT_SOURCE_LABEL[shipment.source]}).` }));
+    renderTaskGComparisonTable(resultBox, results);
+    return;
+  }
+
   const card = taskGCurrentCard();
   if (!card) { resultBox.appendChild(h("p", { class: "error", text: "Pick or add a rate card first." })); return; }
-
-  const totalWeightKg = parseFloat(document.getElementById("g-weight-kg").value);
-  const parcelCount = parseInt(document.getElementById("g-parcels").value, 10) || 1;
-  const l = parseFloat(document.getElementById("g-dim-l").value);
-  const w = parseFloat(document.getElementById("g-dim-w").value);
-  const ht = parseFloat(document.getElementById("g-dim-h").value);
-  const dimUnit = document.getElementById("g-dim-unit").value;
-  const dims = (l > 0 && w > 0 && ht > 0) ? { length: l, width: w, height: ht, unit: dimUnit } : null;
-
-  const quote = taskG.quoteFreight({ card, totalWeightKg, parcelCount, dims, dest: taskGState.dest });
+  const quote = taskG.quoteFreight({ card, totalWeightKg: shipment.totalWeightKg, parcelCount: shipment.parcelCount, dims: shipment.dims, dest: taskGDest() });
   if (quote.error) {
     resultBox.appendChild(h("p", { class: "error", text: quote.error }));
     return;
   }
-
-  const fmtMoney = (amount) => `${amount.toFixed(2)}${quote.currency ? " " + quote.currency : ""}`;
-
-  if (quote.expired) {
-    resultBox.appendChild(h("p", { class: "warning", text: `⚠ This rate card expired on ${quote.expiryDate} — confirm current pricing before quoting a customer.` }));
-  }
-  resultBox.appendChild(h("p", { class: "info", text:
-    `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
-  const surchargeParts = [];
-  if (quote.percentSurcharge) surchargeParts.push(`+ ${(quote.percentSurcharge * 100).toFixed(2)}% fuel/surcharge ${fmtMoney(quote.percentAmount)}`);
-  if (quote.flatSurcharge) surchargeParts.push(`+ flat surcharge ${fmtMoney(quote.flatSurcharge)}`);
-  const surchargeNote = surchargeParts.length ? ` (rate ${fmtMoney(quote.baseCost)} ${surchargeParts.join(" ")})` : "";
-  resultBox.appendChild(h("p", { class: "info", text:
-    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${fmtMoney(quote.perParcelCost)}${surchargeNote}` }));
-  const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${fmtMoney(quote.totalCost)}` });
-  totalP.style.fontSize = "1.25rem";
-  totalP.style.fontWeight = "800";
-  resultBox.appendChild(totalP);
-  if (card.notes) resultBox.appendChild(h("p", { class: "caption", text: `Rate card notes: ${card.notes}` }));
+  renderQuoteBreakdown(resultBox, quote, card, null);
 }
 
 function renderTaskGRateCardEditor() {
@@ -2954,7 +3170,7 @@ function renderTaskGRateCardEditor() {
   cards.forEach((card) => {
     const isActive = card.id === taskGState.rateCardId;
     const btn = h("button", { class: isActive ? "run-btn" : "clear-btn", text: card.name });
-    btn.addEventListener("click", () => { taskGState.rateCardId = card.id; taskGState.dest = {}; renderTaskG(); });
+    btn.addEventListener("click", () => { taskGState.rateCardId = card.id; taskGState.zoneOverride = ""; renderTaskG(); });
     listWrap.appendChild(btn);
   });
   root.appendChild(listWrap);
@@ -3086,14 +3302,18 @@ function renderTaskGRateCardEditor() {
     zsSelect.value = card.zoneSource;
     zsSelect.addEventListener("change", () => {
       card.zoneSource = zsSelect.value;
-      if (card.zoneSource === "usps") {
+      // Only seed a starter 1-9 zone set for a still-untouched default
+      // card ("All") — a card that already has real zones (including
+      // Stord's own named exceptions like Hawaii/Alaska, which don't fit
+      // a plain numbered set) keeps them as-is when the source is toggled.
+      if (card.zoneSource === "usps" && card.zones.length === 1 && card.zones[0] === "All") {
         const zones = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
         card.zones = zones;
         card.countryZoneMap = {};
         for (const row of card.brackets) row.prices = Object.fromEntries(zones.map((z) => [z, row.prices[z] || 0]));
         card.perUnit = Object.fromEntries(zones.map((z) => [z, card.perUnit[z] || { base: 0, rate: 0, min: 0 }]));
       }
-      taskGState.dest = {};
+      taskGState.zoneOverride = "";
       saveFreightRateCardsToStorage(taskGState.rateCards);
       renderTaskG();
     });
@@ -3126,6 +3346,24 @@ function renderTaskGRateCardEditor() {
   cfgGrid.appendChild(pctWrap);
 
   root.appendChild(cfgGrid);
+
+  const splitWrap = h("label", { class: "checkbox-inline" });
+  const splitCb = h("input", { type: "checkbox" });
+  splitCb.checked = !!card.splitAllowed;
+  splitCb.addEventListener("change", () => { card.splitAllowed = splitCb.checked; saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+  splitWrap.appendChild(splitCb);
+  splitWrap.appendChild(document.createTextNode(" Allow a shipment heavier than this card's own maximum bracket to be proposed as a split into multiple separately-rated consignments (rather than showing \"Quote required\")"));
+  root.appendChild(splitWrap);
+
+  if (card.splitAllowed) {
+    const physWrap = h("div", { class: "col-field" });
+    physWrap.appendChild(h("label", { text: `Carrier's physical per-consignment weight limit (optional, ${card.weightUnit} — caps each proposed consignment below the rate table's own max if lower)` }));
+    const physInput = h("input", { type: "number", min: "0", step: "0.01" });
+    physInput.value = card.maxPhysicalWeight || "";
+    physInput.addEventListener("change", () => { card.maxPhysicalWeight = parseFloat(physInput.value) || null; saveFreightRateCardsToStorage(taskGState.rateCards); });
+    physWrap.appendChild(physInput);
+    root.appendChild(physWrap);
+  }
 
   const notesWrap = h("div", { class: "col-field" });
   notesWrap.appendChild(h("label", { text: "Notes (zone definitions, surcharges not included above, service restrictions, etc.)" }));
@@ -3266,6 +3504,9 @@ function renderTaskG() {
   renderTaskGWarehouseSelect();
   renderTaskGRateCardSelect();
   renderTaskGDest();
+  renderTaskGOrderTable();
+  renderTaskGOrderSummary();
+  renderTaskGProductCatalogEditor();
   renderTaskGRateCardEditor();
 }
 
@@ -3393,15 +3634,30 @@ function init() {
   document.getElementById("g-warehouse").addEventListener("change", (e) => {
     taskGState.warehouseId = e.target.value;
     taskGState.rateCardId = null;
-    taskGState.dest = {};
+    taskGState.zoneOverride = "";
     renderTaskG();
   });
   document.getElementById("g-ratecard").addEventListener("change", (e) => {
     taskGState.rateCardId = e.target.value;
-    taskGState.dest = {};
-    renderTaskG();
+    taskGState.zoneOverride = "";
+    renderTaskGDest();
   });
-  document.getElementById("g-weight-kg").addEventListener("input", renderTaskGWeightConverted);
+  document.getElementById("g-compare-all").addEventListener("change", (e) => {
+    taskGState.compareAll = e.target.checked;
+    document.getElementById("g-warehouse").disabled = taskGState.compareAll;
+    document.getElementById("g-ratecard").disabled = taskGState.compareAll;
+    document.getElementById("g-dest").style.display = taskGState.compareAll ? "none" : "";
+  });
+  ["g-dest-country", "g-dest-zip"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", () => {
+      taskGState.destination.country = document.getElementById("g-dest-country").value.trim();
+      taskGState.destination.zip = document.getElementById("g-dest-zip").value.trim();
+      renderTaskGDest();
+    });
+  });
+  ["g-carton-l", "g-carton-w", "g-carton-h", "g-carton-weight", "g-carton-count"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", renderTaskGOrderSummary);
+  });
   document.getElementById("g-calc-btn").addEventListener("click", computeTaskGQuote);
 
   renderTaskA();

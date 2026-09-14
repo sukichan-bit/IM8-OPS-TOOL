@@ -529,6 +529,7 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
 .ops2-how p { margin: 8px 0 0; }
 
 .ops2-hr { height: 2px; border: 0; margin: 0; background: var(--ops-divider); }
+.ops2-step { margin: 14px 0 4px; font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ops-accent); }
 
 .ops2-required-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .ops2-required-head h6 { margin: 0; font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
@@ -1117,13 +1118,35 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
       <div class="ops2-heading">
         <div class="ops2-eyebrow">Task G</div>
         <h2>B2B Freight Cost Calculator</h2>
-        <p class="task-lede">Estimates outbound freight cost for a B2B order, so you can quote a customer.</p>
+        <p class="task-lede">Enter a destination and ordered quantities, then estimate shipping cost from one warehouse — or compare all of them.</p>
         <details class="task-detail ops2-how"><summary>How this works</summary>
-          <p>Enter the counted weight in kg (converted to the rate card's own unit automatically), pick the shipping warehouse and its rate card, and the destination. Rate cards are your own data — maintained below and saved in this browser, never guessed at. Stord's US domestic cards price by USPS zone (1-9), computed automatically from the shipping warehouse's ZIP and the destination ZIP using a baked-in USPS zone chart; other warehouses' cards resolve a destination country/zone you define.</p>
+          <p>Shipment weight is estimated from the ordered quantities below (actual weight vs. estimated volumetric weight — greater of the two wins), unless you enter real outer-carton dimensions/gross weight once packed, which override the estimate. The destination country and ZIP/postal code resolve a rate card's zone automatically where possible (Stord's US domestic cards use the real USPS zone chart, by ZIP) — a manual override is always available and is clearly labelled when used, never silently assumed. A shipment heavier than a rate card's own maximum is proposed as a split into multiple consignments where the card allows it; otherwise it's marked "Quote required" rather than guessed at. Rate cards and the product catalogue are your own data — maintained below and saved in this browser.</p>
         </details>
       </div>
       <hr class="ops2-hr">
 
+      <h6 class="ops2-step">1 · Destination</h6>
+      <div class="col-grid">
+        <div class="col-field"><label>Destination country</label><input type="text" id="g-dest-country" placeholder="e.g. United States, Germany, Canada"></div>
+        <div class="col-field"><label>Destination ZIP / postal code</label><input type="text" id="g-dest-zip" placeholder="5-digit US ZIP for Stord auto-zone"></div>
+      </div>
+
+      <h6 class="ops2-step">2 · Ordered quantities</h6>
+      <div id="g-order-table"></div>
+      <div id="g-order-summary"></div>
+      <details class="task-detail">
+        <summary>Actual outer-carton dimensions &amp; gross weight (optional — overrides the estimate once packed)</summary>
+        <div class="col-grid">
+          <div class="col-field"><label>Length (cm)</label><input type="number" id="g-carton-l" min="0" step="0.1"></div>
+          <div class="col-field"><label>Width (cm)</label><input type="number" id="g-carton-w" min="0" step="0.1"></div>
+          <div class="col-field"><label>Height (cm)</label><input type="number" id="g-carton-h" min="0" step="0.1"></div>
+          <div class="col-field"><label>Gross weight per carton (kg)</label><input type="number" id="g-carton-weight" min="0" step="0.01"></div>
+          <div class="col-field"><label>Number of cartons</label><input type="number" id="g-carton-count" min="1" step="1" value="1"></div>
+        </div>
+        <p class="caption">When given, these override the product-catalogue estimate above, per carton.</p>
+      </details>
+
+      <h6 class="ops2-step">3 · Warehouse</h6>
       <div class="col-grid">
         <div class="col-field">
           <label>Shipping warehouse</label>
@@ -1134,37 +1157,17 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
           <select id="g-ratecard"></select>
         </div>
       </div>
-
+      <label class="checkbox-inline"><input type="checkbox" id="g-compare-all"> Compare all applicable warehouses instead of just the one selected above</label>
       <div id="g-dest"></div>
 
-      <div class="col-grid">
-        <div class="col-field">
-          <label>Total counted weight (kg)</label>
-          <input type="number" id="g-weight-kg" min="0" step="0.01" placeholder="e.g. 12.5">
-        </div>
-        <div class="col-field">
-          <label>Number of parcels/boxes</label>
-          <input type="number" id="g-parcels" min="1" step="1" value="1">
-        </div>
-      </div>
-      <p class="caption" id="g-weight-converted"></p>
-
-      <details class="task-detail">
-        <summary>Package dimensions (optional — only needed if the rate card charges on volumetric/dimensional weight)</summary>
-        <div class="col-grid">
-          <div class="col-field"><label>Length</label><input type="number" id="g-dim-l" min="0" step="0.1"></div>
-          <div class="col-field"><label>Width</label><input type="number" id="g-dim-w" min="0" step="0.1"></div>
-          <div class="col-field"><label>Height</label><input type="number" id="g-dim-h" min="0" step="0.1"></div>
-          <div class="col-field">
-            <label>Unit</label>
-            <select id="g-dim-unit"><option value="cm">cm</option><option value="in">in</option></select>
-          </div>
-        </div>
-        <p class="caption">Dimensions are per parcel. Only used if the selected rate card has a volumetric divisor set (see rate card editor below).</p>
-      </details>
-
+      <h6 class="ops2-step">4 · Calculate</h6>
       <button type="button" class="run-btn" id="g-calc-btn">Calculate freight cost</button>
       <div id="g-quote-result"></div>
+
+      <hr class="ops2-hr">
+      <details class="task-detail"><summary>Product catalogue (edit defaults, add new products)</summary>
+        <div id="g-product-catalog-editor"></div>
+      </details>
 
       <hr class="ops2-hr">
       <div id="g-ratecard-editor"></div>
@@ -1172,11 +1175,11 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
     <section class="ops2-right">
       <div class="ops2-empty">
         <h6>Output</h6>
-        <div class="ops2-empty-title">Fill in a rate card below, then calculate.</div>
+        <div class="ops2-empty-title">Enter a destination and quantities, then calculate.</div>
         <div class="ops2-preview">
-          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Chargeable weight per parcel (actual vs. volumetric, whichever is greater)</span></div>
-          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Zone/rate used and per-parcel cost</span></div>
-          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Total estimated freight cost for the shipment</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Actual, volumetric, and chargeable weight, with the source (order estimate vs. carton override)</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Zone (auto-detected or manual override), rate bracket or proposed split, and cost</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">A full warehouse comparison, cheapest highlighted, when comparing all</span></div>
         </div>
       </div>
     </section>
@@ -4568,6 +4571,98 @@ function getWarehouse(id) {
   return FREIGHT_WAREHOUSES.find((w) => w.id === id) || null;
 }
 
+// ---------- Product catalog & order-based weight estimate ----------
+// A user-maintained catalog of products (dimensions in cm, weight in kg)
+// so a quote can start from "how many of each did the customer order"
+// instead of the ops team hand-computing a shipment weight every time.
+let productSeq = 0;
+function newProductId() {
+  productSeq += 1;
+  return `prod_${Date.now().toString(36)}_${productSeq}`;
+}
+
+function defaultProductCatalog() {
+  const rows = [
+    ["Essential Starter Kit", 31, 15, 27, 1.8],
+    ["Essential Refills (30ct)", 13, 15, 10.5, 0.5],
+    ["Essential Trial Pack (7ct)", 11, 15, 2.5, 0.1],
+    ["Beckham Stack Starter Kit", 43, 15, 27, 2.4],
+    ["Longevity Starter Kit", 28, 17, 11.5, 1.42],
+    ["Longevity Refills (30ct)", 13, 15, 6, 0.3],
+    ["Longevity Trial Pack (7ct)", 11, 15, 2.5, 0.1],
+  ];
+  return rows.map(([name, lengthCm, widthCm, heightCm, weightKg]) => ({
+    id: newProductId(), name, lengthCm, widthCm, heightCm, weightKg,
+  }));
+}
+
+function emptyProduct() {
+  return { id: newProductId(), name: "New product", lengthCm: 0, widthCm: 0, heightCm: 0, weightKg: 0 };
+}
+
+// Industry-standard volumetric divisor for an unknown/unpacked shipment
+// estimate (cm³ / 5000 = kg) — distinct from a rate card's own dimDivisor,
+// which applies once real outer-carton dimensions are known instead (see
+// resolveShipmentWeight() below).
+const CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG = 5000;
+
+// quantities: { [productId]: qty }. Ignores products with qty <= 0 (or
+// not present). Returns the actual/volumetric/chargeable estimate implied
+// by the catalog alone — before any real outer-carton override.
+function computeOrderWeights(products, quantities) {
+  quantities = quantities || {};
+  let totalActualKg = 0;
+  let totalVolumeCm3 = 0;
+  const lines = [];
+  for (const p of products) {
+    const qty = Number(quantities[p.id]) || 0;
+    if (qty <= 0) continue;
+    const lineWeightKg = qty * (Number(p.weightKg) || 0);
+    const lineVolumeCm3 = qty * (Number(p.lengthCm) || 0) * (Number(p.widthCm) || 0) * (Number(p.heightCm) || 0);
+    totalActualKg += lineWeightKg;
+    totalVolumeCm3 += lineVolumeCm3;
+    lines.push({ productId: p.id, name: p.name, qty, lineWeightKg, lineVolumeCm3 });
+  }
+  const volumetricKg = totalVolumeCm3 / CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG;
+  const chargeableKg = Math.max(totalActualKg, volumetricKg);
+  return { lines, totalActualKg, totalVolumeCm3, volumetricKg, chargeableKg };
+}
+
+// Combines the product-catalog estimate with an optional real outer-
+// carton override (actual measured dims + gross weight, once packed —
+// always takes precedence when given, per carton, over the catalog
+// estimate) into the single shipment-weight description the rest of this
+// module (computeChargeableWeightPerParcel, quoteFreight) already
+// expects: a total kg figure plus an optional per-parcel dims block.
+// cartonOverride: { lengthCm, widthCm, heightCm, grossWeightKg, cartons }
+// — any subset may be provided; only fields that are actually set (> 0)
+// override their catalog-derived counterpart. Returns
+// { totalWeightKg, parcelCount, dims, source: "catalog" | "override" | "mixed",
+//   catalog: {...computeOrderWeights result...} }.
+function resolveShipmentWeight({ products, quantities, cartonOverride }) {
+  const catalog = computeOrderWeights(products || [], quantities || {});
+  cartonOverride = cartonOverride || {};
+  const cartons = Math.max(1, Number(cartonOverride.cartons) || 1);
+  const hasDimsOverride = cartonOverride.lengthCm > 0 && cartonOverride.widthCm > 0 && cartonOverride.heightCm > 0;
+  const hasWeightOverride = cartonOverride.grossWeightKg > 0;
+
+  let totalWeightKg;
+  let dims = null;
+  let source;
+  if (hasWeightOverride) {
+    totalWeightKg = cartonOverride.grossWeightKg * cartons;
+    source = hasDimsOverride ? "override" : "mixed";
+  } else {
+    totalWeightKg = catalog.chargeableKg;
+    source = "catalog";
+  }
+  if (hasDimsOverride) {
+    dims = { length: cartonOverride.lengthCm, width: cartonOverride.widthCm, height: cartonOverride.heightCm, unit: "cm" };
+    if (!hasWeightOverride) source = "mixed"; // real dims, but catalog-estimated weight
+  }
+  return { totalWeightKg, parcelCount: cartons, dims, source, catalog };
+}
+
 // ---------- Rate card model ----------
 let rateCardSeq = 0;
 function newRateCardId() {
@@ -4609,6 +4704,19 @@ function emptyManualCard(warehouseId, name, weightUnit, dimUnit, currency) {
     // until a fresh one is entered/imported).
     effectiveDate: null,
     expiryDate: null,
+    // Whether a shipment heavier than this card's own top bracket may be
+    // proposed as multiple separately-rated consignments (see
+    // proposeSplitConsignments()) rather than refused outright. Off by
+    // default — splitting isn't always permitted (customs docs for a
+    // single international consignment, a carrier that just doesn't offer
+    // it), so this is a per-card opt-in, not an assumption.
+    splitAllowed: false,
+    // The carrier's actual physical parcel/shipment weight limit, if lower
+    // than (or just distinct from) the rate table's own top bracket — caps
+    // how big any single proposed consignment may be. Null = no separate
+    // physical cap known; the rate table's own max bracket is the only
+    // limit applied.
+    maxPhysicalWeight: null,
     notes: "",
   };
 }
@@ -4634,6 +4742,8 @@ function emptyUspsCard(warehouseId, name, weightUnit, dimUnit, currency) {
     percentSurcharge: 0,
     effectiveDate: null,
     expiryDate: null,
+    splitAllowed: false,
+    maxPhysicalWeight: null,
     notes: "",
   };
 }
@@ -5382,71 +5492,99 @@ const STORD_INTERNATIONAL_DDU_SEED = {"mode":"bracket","weightUnit":"lb","dimUni
 function stordEconomyAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Economy", "lb", "in");
   Object.assign(card, STORD_ECONOMY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordEconomyRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Economy", "lb", "in");
   Object.assign(card, STORD_ECONOMY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordGroundResidentialAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Ground Standard (Residential)", "lb", "in");
   Object.assign(card, STORD_GROUND_RESIDENTIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordGroundResidentialRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Ground Standard (Residential)", "lb", "in");
   Object.assign(card, STORD_GROUND_RESIDENTIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordGroundCommercialAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Ground Standard (Commercial)", "lb", "in");
   Object.assign(card, STORD_GROUND_COMMERCIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordGroundCommercialRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Ground Standard (Commercial)", "lb", "in");
   Object.assign(card, STORD_GROUND_COMMERCIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordSecondDayAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Second Day", "lb", "in");
   Object.assign(card, STORD_SECOND_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordSecondDayRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Second Day", "lb", "in");
   Object.assign(card, STORD_SECOND_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stord3DayAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord 3 Day", "lb", "in");
   Object.assign(card, STORD_3_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stord3DayRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord 3 Day", "lb", "in");
   Object.assign(card, STORD_3_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordOvernightAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Overnight", "lb", "in");
   Object.assign(card, STORD_OVERNIGHT_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordOvernightRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Overnight", "lb", "in");
   Object.assign(card, STORD_OVERNIGHT_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordBpmAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord BPM (Bound Printed Matter)", "lb", "in");
   Object.assign(card, STORD_BPM_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordBpmRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord BPM (Bound Printed Matter)", "lb", "in");
   Object.assign(card, STORD_BPM_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
+  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
   return card;
 }
 function stordPriorityDdpAtlCard() {
@@ -5621,26 +5759,156 @@ function priceForZone(card, zone, weight) {
   return { price };
 }
 
-// Resolves which price column ("zone") applies to a destination, given the
-// card's zone source. dest = { country, zone, zip }.
+// The rate table's own maximum listed weight (its top bracket) — distinct
+// from a card's maxPhysicalWeight, which is the carrier's actual physical
+// parcel/shipment limit and may be lower (or simply unrelated). Returns
+// null for a perUnit card (no fixed ceiling) or a bracket card with no
+// bracket max set anywhere.
+function cardRateTableMaxWeight(card) {
+  if (card.mode !== "bracket" || !card.brackets || !card.brackets.length) return null;
+  const maxes = card.brackets.map((b) => b.max).filter((m) => m != null && isFinite(m));
+  return maxes.length ? Math.max(...maxes) : null;
+}
+
+// Greedily splits a shipment heavier than maxPerConsignment into full-
+// max-weight consignments plus one remainder consignment — e.g. 300kg
+// over a 200kg max -> [200, 100]. Returns null if maxPerConsignment isn't
+// a usable positive number (not enough information to propose a split).
+function proposeSplitConsignments(weight, maxPerConsignment) {
+  if (!(maxPerConsignment > 0) || !(weight > 0)) return null;
+  const consignments = [];
+  let remaining = weight;
+  while (remaining > maxPerConsignment + 1e-9) {
+    consignments.push(maxPerConsignment);
+    remaining -= maxPerConsignment;
+  }
+  if (remaining > 1e-9) consignments.push(remaining);
+  return consignments;
+}
+
+// USPS zone charts (see USPS_ZONE_CHARTS above) return a plain numbered
+// zone for every ZIP, but Stord's own domestic rate cards price a
+// handful of destinations (Hawaii, Alaska, Puerto Rico, other US
+// territories, APO/FPO) as their own named zone instead of a number —
+// these areas get their own carrier handling regardless of numeric
+// distance-zone. Detected by ZIP3 range; returns null for the
+// continental US (use the standard numbered USPS zone lookup instead).
+// NOTE: some Stord services split Alaska/Hawaii further into Metro/Rural
+// (not ZIP-range-derivable without a much finer dataset) — resolveZone()
+// below refuses to guess between those rather than silently picking one.
+function resolveStordNamedZone(destZip) {
+  const digits = String(destZip || "").replace(/\D/g, "");
+  if (digits.length < 5) return null;
+  const zip3 = parseInt(digits.slice(0, 3), 10);
+  if (zip3 >= 967 && zip3 <= 968) return "Hawaii";
+  if (zip3 >= 995 && zip3 <= 999) return "Alaska";
+  if (zip3 >= 6 && zip3 <= 9) return "Puerto Rico";
+  if (zip3 === 340 || (zip3 >= 90 && zip3 <= 98) || (zip3 >= 962 && zip3 <= 966)) return "APO/FPO";
+  if (zip3 === 969) return "Other US Territories";
+  return null;
+}
+
+// A single free-text "destination country" field has to match against
+// many different cards' countryZoneMap keys, which aren't consistently
+// cased (Stord: "AUSTRIA"; GPS: "Australia"; NL: "GERMANY") — matches
+// case-insensitively, and tolerates surrounding whitespace.
+function findCountryZone(countryZoneMap, country) {
+  if (!country) return null;
+  const target = String(country).trim().toLowerCase();
+  if (!target) return null;
+  for (const key of Object.keys(countryZoneMap)) {
+    if (key.trim().toLowerCase() === target) return countryZoneMap[key];
+  }
+  return null;
+}
+
+// Resolves which price column ("zone") applies to a destination, given
+// the card's zone source. dest = { country, zone, zip }. An explicit
+// dest.zone always wins over auto-detection (a deliberate manual
+// override, never silently ignored) — the result's `manualOverride` /
+// `autoDetected` flags tell the caller which happened, so the UI can
+// label it rather than presenting a guess as fact.
 function resolveZone(card, dest) {
   dest = dest || {};
+  if (dest.zone && card.zones.includes(dest.zone)) return { zone: dest.zone, manualOverride: true };
   if (card.zoneSource === "usps") {
     const wh = getWarehouse(card.warehouseId);
     if (!wh || !wh.uspsOriginZip3) return { error: "This warehouse has no USPS origin ZIP configured for zone lookup." };
+    const named = resolveStordNamedZone(dest.zip);
+    if (named) {
+      if (card.zones.includes(named)) return { zone: named, raw: named, autoDetected: true };
+      return { error: `Destination ZIP falls in ${named}, and this rate card splits that into more specific zones (e.g. Metro/Rural) — pick the correct one manually rather than guessing.` };
+    }
     const z = lookupUspsZone(wh.uspsOriginZip3, dest.zip);
     if (z.error) return z;
-    return { zone: z.zone, raw: z.raw };
+    return { zone: z.zone, raw: z.raw, autoDetected: true };
   }
   if (card.zones.length === 1) return { zone: card.zones[0] };
-  if (dest.zone && card.zones.includes(dest.zone)) return { zone: dest.zone };
-  if (dest.country && card.countryZoneMap[dest.country]) return { zone: card.countryZoneMap[dest.country] };
+  const byCountry = findCountryZone(card.countryZoneMap, dest.country);
+  if (byCountry) return { zone: byCountry, raw: byCountry, autoDetected: true };
   return { error: "Pick a destination zone (or country) for this rate card." };
 }
 
-// Full quote: resolves the zone, computes chargeable weight, prices it,
-// and totals across parcels. Returns { error } on any failure, or the
-// quote breakdown otherwise.
+// Prices a single weight against a card, proposing a multi-consignment
+// split if the weight exceeds the card's rate-table maximum and the card
+// allows splitting (card.splitAllowed). Returns:
+//   { price, baseCost, percentAmount, flatSurcharge, split: null } — a
+//     normal single-consignment price (surcharges already folded in);
+//   { price, baseCost, percentAmount, flatSurcharge, split: [...] } — a
+//     proposed split, each entry { weight, baseCost, percentAmount,
+//     flatSurcharge, cost } — surcharges are applied per consignment,
+//     matching how a carrier would actually bill separately-rated
+//     shipments;
+//   { quoteRequired: true, reason } — over the max, but splitting isn't
+//     enabled or there isn't enough information to propose one;
+//   { error } — some other pricing failure (e.g. no price for this zone),
+//     unrelated to being over the weight max.
+function priceWeightForCard(card, zone, weight) {
+  const percentSurcharge = Number(card.percentSurcharge) || 0;
+  const flatSurcharge = Number(card.flatSurcharge) || 0;
+  const withSurcharges = (basePrice) => {
+    const percentAmount = Math.round(basePrice * percentSurcharge * 100) / 100;
+    return { baseCost: basePrice, percentAmount, flatSurcharge, total: Math.round((basePrice + percentAmount + flatSurcharge) * 100) / 100 };
+  };
+
+  const direct = priceForZone(card, zone, weight);
+  if (!direct.error) {
+    const s = withSurcharges(direct.price);
+    return { price: s.total, baseCost: s.baseCost, percentAmount: s.percentAmount, flatSurcharge: s.flatSurcharge, split: null };
+  }
+
+  const tableMax = cardRateTableMaxWeight(card);
+  const overMax = tableMax != null && weight > tableMax;
+  if (!overMax) return direct; // a different pricing failure (e.g. missing zone price) — surface as-is, not a split case
+
+  if (!card.splitAllowed) {
+    return { quoteRequired: true, reason: `${weight.toFixed(2)} ${card.weightUnit} exceeds this card's maximum of ${tableMax} ${card.weightUnit}, and splitting into multiple consignments isn't enabled for this card.` };
+  }
+  const cap = card.maxPhysicalWeight > 0 ? Math.min(tableMax, card.maxPhysicalWeight) : tableMax;
+  const consignments = proposeSplitConsignments(weight, cap);
+  if (!consignments) {
+    return { quoteRequired: true, reason: "This card doesn't have enough information (a usable maximum bracket weight) to propose a split." };
+  }
+  const priced = [];
+  let total = 0, totalBase = 0, totalPercent = 0, totalFlat = 0;
+  for (const w of consignments) {
+    const r = priceForZone(card, zone, w);
+    if (r.error) return { quoteRequired: true, reason: `Could not price a ${w.toFixed(2)} ${card.weightUnit} consignment of the split: ${r.error}` };
+    const s = withSurcharges(r.price);
+    priced.push({ weight: w, baseCost: s.baseCost, percentAmount: s.percentAmount, flatSurcharge: s.flatSurcharge, cost: s.total });
+    total += s.total; totalBase += s.baseCost; totalPercent += s.percentAmount; totalFlat += s.flatSurcharge;
+  }
+  return {
+    price: Math.round(total * 100) / 100, baseCost: Math.round(totalBase * 100) / 100,
+    percentAmount: Math.round(totalPercent * 100) / 100, flatSurcharge: Math.round(totalFlat * 100) / 100,
+    split: priced,
+  };
+}
+
+// Full quote: resolves the zone, computes chargeable weight, prices it
+// (proposing a split if over the card's max and splitAllowed), and totals
+// across parcels. Returns { error } or { quoteRequired, reason } on
+// failure, or the quote breakdown otherwise.
 function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
   if (!card) return { error: "No rate card selected." };
   if (!(totalWeightKg > 0)) return { error: "Enter a total weight greater than 0 kg." };
@@ -5648,31 +5916,68 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
   const zoneResult = resolveZone(card, dest);
   if (zoneResult.error) return zoneResult;
   const perParcelWeight = computeChargeableWeightPerParcel({ totalWeightKg, parcelCount: count, dims, card });
-  const priceResult = priceForZone(card, zoneResult.zone, perParcelWeight);
-  if (priceResult.error) return priceResult;
-  const percentSurcharge = Number(card.percentSurcharge) || 0;
-  const percentAmount = Math.round(priceResult.price * percentSurcharge * 100) / 100;
-  const flatSurcharge = Number(card.flatSurcharge) || 0;
-  const perParcelCost = priceResult.price + percentAmount + flatSurcharge;
   const expired = !!(card.expiryDate && new Date(card.expiryDate) < new Date());
+  const zoneFlags = {
+    zone: zoneResult.zone,
+    zoneRaw: zoneResult.raw || zoneResult.zone,
+    zoneAutoDetected: !!zoneResult.autoDetected,
+    zoneManualOverride: !!zoneResult.manualOverride,
+  };
+
+  const priced = priceWeightForCard(card, zoneResult.zone, perParcelWeight);
+  if (priced.quoteRequired) {
+    return { quoteRequired: true, reason: priced.reason, perParcelWeight, weightUnit: card.weightUnit, parcelCount: count, ...zoneFlags, expired, expiryDate: card.expiryDate || null };
+  }
+  if (priced.error) return priced;
   return {
     parcelCount: count,
     perParcelWeight,
     weightUnit: card.weightUnit,
     currency: card.currency || "",
-    baseCost: priceResult.price,
-    percentSurcharge,
-    percentAmount,
-    flatSurcharge,
-    perParcelCost,
-    totalCost: perParcelCost * count,
-    zone: zoneResult.zone,
-    zoneRaw: zoneResult.raw || zoneResult.zone,
+    baseCost: priced.baseCost,
+    percentSurcharge: Number(card.percentSurcharge) || 0,
+    percentAmount: priced.percentAmount,
+    flatSurcharge: priced.flatSurcharge,
+    perParcelCost: priced.price,
+    totalCost: Math.round(priced.price * count * 100) / 100,
+    split: priced.split,
+    // Not confirmed against real packing — a split proposal only reflects
+    // a weight breakdown, so the caller should label it as an estimate
+    // pending packing confirmation rather than a firm quote.
+    packingConfirmationRequired: !!priced.split,
+    ...zoneFlags,
     // Not an error — an expired card is still the best estimate available
     // until a fresh one is entered, but the caller should flag it clearly.
     expired,
     expiryDate: card.expiryDate || null,
   };
+}
+
+// ---------- Multi-warehouse comparison ----------
+// For a given destination + shipment weight, tries every rate card on
+// every (or a chosen subset of) warehouses and returns whichever produced
+// a real quote, a "quote required" case, or a hard error — never
+// silently skips a card just because it errored, so a genuinely
+// unsupported route stays visible instead of disappearing from the
+// comparison. `warehouseIds` narrows to a subset (e.g. one warehouse);
+// omit for every configured warehouse.
+function compareWarehouseQuotes({ rateCards, warehouseIds, totalWeightKg, parcelCount, dims, dest }) {
+  const ids = warehouseIds && warehouseIds.length ? warehouseIds : FREIGHT_WAREHOUSES.map((w) => w.id);
+  const results = [];
+  for (const whId of ids) {
+    const wh = getWarehouse(whId);
+    const cards = (rateCards && rateCards[whId]) || [];
+    for (const card of cards) {
+      const quote = quoteFreight({ card, totalWeightKg, parcelCount, dims, dest });
+      results.push({ warehouseId: whId, warehouseName: wh ? wh.name : whId, cardId: card.id, cardName: card.name, currency: card.currency || "", ...quote });
+    }
+  }
+  // Cheapest-first among the ones that actually produced a total cost;
+  // errors/quote-required entries sort after, in their original order.
+  const priced = results.filter((r) => typeof r.totalCost === "number");
+  const other = results.filter((r) => typeof r.totalCost !== "number");
+  priced.sort((a, b) => a.totalCost - b.totalCost);
+  return priced.concat(other);
 }
 
 // Browser namespace — app.js calls these as taskG.xxx(...).
@@ -5685,7 +5990,8 @@ if (typeof window !== "undefined") {
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
-    computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
+    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
+    newProductId, defaultProductCatalog, emptyProduct, computeOrderWeights, resolveShipmentWeight, CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG,
   };
 }
 
@@ -5698,7 +6004,8 @@ if (typeof module !== "undefined") {
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
-    computeChargeableWeightPerParcel, priceForZone, resolveZone, quoteFreight,
+    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
+    newProductId, defaultProductCatalog, emptyProduct, computeOrderWeights, resolveShipmentWeight, CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG,
   };
 }
 
@@ -8597,11 +8904,47 @@ function saveFreightRateCardsToStorage(cards) {
   }
 }
 
+// The product catalog is likewise the user's own data (dimensions in cm,
+// weight in kg) — persisted the same way as the rate cards, seeded with
+// the 7 real IM8 products so a fresh browser still has something usable.
+const FREIGHT_PRODUCT_CATALOG_STORAGE_KEY = "im8OpsToolFreightProductCatalogV1";
+
+function loadFreightProductCatalogFromStorage() {
+  try {
+    const raw = localStorage.getItem(FREIGHT_PRODUCT_CATALOG_STORAGE_KEY);
+    if (!raw) return taskG.defaultProductCatalog();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length ? parsed : taskG.defaultProductCatalog();
+  } catch (e) {
+    return taskG.defaultProductCatalog();
+  }
+}
+function saveFreightProductCatalogToStorage(products) {
+  try {
+    localStorage.setItem(FREIGHT_PRODUCT_CATALOG_STORAGE_KEY, JSON.stringify(products));
+  } catch (e) {
+    // Storage disabled/full — still works for this page load.
+  }
+}
+
 const taskGState = {
   rateCards: loadFreightRateCardsFromStorage(),
+  products: loadFreightProductCatalogFromStorage(),
   warehouseId: taskG.FREIGHT_WAREHOUSES[0].id,
   rateCardId: null,
-  dest: {}, // { country } and/or { zone } and/or { zip }, depending on the card's zone source
+  compareAll: false,
+  // The unified destination — one country/ZIP pair used for every card,
+  // regardless of that card's own zone system (country lookup, USPS
+  // auto-zone, or a single fixed zone). zoneOverride is a manual pick
+  // that always wins over auto-detection when set (see resolveZone());
+  // blank means "let the card auto-detect".
+  destination: { country: "", zip: "" },
+  zoneOverride: "",
+  // Ordered quantities, keyed by product id — session-only, like the old
+  // weight/parcel inputs were (a specific customer order isn't something
+  // to remember across page loads the way rate cards/products are).
+  quantities: {},
+  cartonOverride: { lengthCm: null, widthCm: null, heightCm: null, grossWeightKg: null, cartons: 1 },
 };
 
 function taskGCurrentCards() {
@@ -8680,6 +9023,19 @@ function renderTaskGRateCardSelect() {
   if (taskGState.rateCardId) select.value = taskGState.rateCardId;
 }
 
+// The destination itself (country + ZIP) is unified and top-level (see
+// #g-dest-country/#g-dest-zip in the template) — the same pair feeds
+// every card's own zone resolution, whatever that card's zone system is.
+// This just builds the { country, zone, zip } dest object resolveZone()
+// expects, adding the manual override (if any) on top.
+function taskGDest() {
+  return { country: taskGState.destination.country, zip: taskGState.destination.zip, zone: taskGState.zoneOverride || undefined };
+}
+
+// Renders the CURRENT card's zone resolution status (auto-detected /
+// manual override / ambiguous / error) plus an "override zone" dropdown —
+// never silently assumes a zone the way a bare lookup would; a manual
+// pick is always available and always clearly labelled once used.
 function renderTaskGDest() {
   const box = document.getElementById("g-dest");
   box.innerHTML = "";
@@ -8689,108 +9045,275 @@ function renderTaskGDest() {
     return;
   }
 
-  if (card.zoneSource === "usps") {
-    const wh = taskG.getWarehouse(card.warehouseId);
+  const result = taskG.resolveZone(card, taskGDest());
+  if (result.error) {
+    box.appendChild(h("p", { class: "error", text: result.error }));
+  } else {
+    const how = result.manualOverride ? "Manual override" : result.autoDetected ? "Auto-detected" : "Default";
+    const rawNote = result.raw && result.raw !== result.zone ? ` (chart shows "${result.raw}")` : "";
+    box.appendChild(h("p", { class: "caption", text: `${how} zone for "${card.name}": ${result.zone}${rawNote}.` }));
+  }
+
+  if (card.zones.length > 1) {
     const wrap = h("div", { class: "col-field" });
-    wrap.appendChild(h("label", { text: "Destination ZIP code (US)" }));
-    const input = h("input", { type: "text", placeholder: "e.g. 90210" });
-    input.value = taskGState.dest.zip || "";
-    const info = h("p", { class: "caption" });
-    const updateInfo = () => {
-      const z = taskG.lookupUspsZone(wh.uspsOriginZip3, input.value);
-      if (z.error) {
-        info.textContent = input.value.trim() ? z.error : "";
-        info.className = input.value.trim() ? "error" : "caption";
-      } else {
-        info.textContent = `USPS Zone ${z.zone}${z.raw !== z.zone ? ` (chart shows "${z.raw}")` : ""} from ${wh.name}.`;
-        info.className = "caption";
-      }
-    };
-    input.addEventListener("input", () => { taskGState.dest = { zip: input.value.trim() }; updateInfo(); });
-    wrap.appendChild(input);
+    wrap.appendChild(h("label", { text: "Override zone (optional — leave blank to auto-detect)" }));
+    const select = h("select", {});
+    select.appendChild(h("option", { value: "", text: "(auto-detect)" }));
+    card.zones.forEach((z) => select.appendChild(h("option", { value: z, text: z })));
+    select.value = taskGState.zoneOverride || "";
+    select.addEventListener("change", () => { taskGState.zoneOverride = select.value; renderTaskGDest(); });
+    wrap.appendChild(select);
     box.appendChild(wrap);
-    box.appendChild(info);
-    updateInfo();
-    return;
   }
-
-  if (card.zones.length === 1) {
-    taskGState.dest = { zone: card.zones[0] };
-    box.appendChild(h("p", { class: "caption", text: `Single rate zone: ${card.zones[0]}.` }));
-    return;
-  }
-
-  const countries = Object.keys(card.countryZoneMap);
-  const grid = h("div", { class: "col-grid" });
-  if (countries.length) {
-    const cWrap = h("div", { class: "col-field" });
-    cWrap.appendChild(h("label", { text: "Destination country" }));
-    const cSelect = h("select", {});
-    countries.forEach((c) => cSelect.appendChild(h("option", { value: c, text: `${c} → ${card.countryZoneMap[c]}` })));
-    cSelect.addEventListener("change", () => { taskGState.dest = { country: cSelect.value }; });
-    taskGState.dest = { country: cSelect.value };
-    cWrap.appendChild(cSelect);
-    grid.appendChild(cWrap);
-  }
-  const zWrap = h("div", { class: "col-field" });
-  zWrap.appendChild(h("label", { text: countries.length ? "...or pick a zone directly" : "Destination zone" }));
-  const zSelect = h("select", {});
-  if (countries.length) zSelect.appendChild(h("option", { value: "", text: "(use country above)" }));
-  card.zones.forEach((z) => zSelect.appendChild(h("option", { value: z, text: z })));
-  zSelect.addEventListener("change", () => { if (zSelect.value) taskGState.dest = { zone: zSelect.value }; });
-  zWrap.appendChild(zSelect);
-  grid.appendChild(zWrap);
-  box.appendChild(grid);
 }
 
-function renderTaskGWeightConverted() {
-  const kgInput = document.getElementById("g-weight-kg");
-  const caption = document.getElementById("g-weight-converted");
-  const kg = parseFloat(kgInput.value);
-  if (!kg || kg <= 0) { caption.textContent = ""; return; }
-  const lb = taskG.convertWeight(kg, "kg", "lb");
-  const oz = taskG.convertWeight(kg, "kg", "oz");
-  caption.textContent = `= ${lb.toFixed(2)} lb = ${oz.toFixed(1)} oz`;
+// ---- Product catalogue ----
+
+function renderTaskGProductCatalogEditor() {
+  const root = document.getElementById("g-product-catalog-editor");
+  if (!root) return;
+  root.innerHTML = "";
+  root.appendChild(h("p", { class: "caption", text: "Dimensions in cm, weight in kg. Saved in this browser and used to estimate shipment weight from ordered quantities below." }));
+
+  const table = h("table", { class: "data-table" });
+  const thead = h("thead", {}, [h("tr", {}, [
+    h("th", { text: "Product" }), h("th", { text: "Length (cm)" }), h("th", { text: "Width (cm)" }),
+    h("th", { text: "Height (cm)" }), h("th", { text: "Weight (kg)" }), h("th", { text: "" }),
+  ])]);
+  const tbody = h("tbody", {});
+  taskGState.products.forEach((p) => {
+    const tr = h("tr", {});
+    const nameInput = h("input", { type: "text" });
+    nameInput.value = p.name;
+    nameInput.addEventListener("change", () => { p.name = nameInput.value.trim() || p.name; saveFreightProductCatalogToStorage(taskGState.products); renderTaskGOrderTable(); });
+    tr.appendChild(h("td", {}, [nameInput]));
+    for (const field of ["lengthCm", "widthCm", "heightCm", "weightKg"]) {
+      const input = h("input", { type: "number", min: "0", step: "0.01" });
+      input.value = p[field];
+      input.addEventListener("change", () => { p[field] = parseFloat(input.value) || 0; saveFreightProductCatalogToStorage(taskGState.products); renderTaskGOrderSummary(); });
+      tr.appendChild(h("td", {}, [input]));
+    }
+    const rmBtn = h("button", { class: "clear-btn", text: "Remove" });
+    rmBtn.addEventListener("click", () => {
+      taskGState.products = taskGState.products.filter((x) => x.id !== p.id);
+      delete taskGState.quantities[p.id];
+      saveFreightProductCatalogToStorage(taskGState.products);
+      renderTaskGProductCatalogEditor();
+      renderTaskGOrderTable();
+    });
+    tr.appendChild(h("td", {}, [rmBtn]));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(thead);
+  table.appendChild(tbody);
+  root.appendChild(table);
+
+  const addBtn = h("button", { class: "clear-btn", text: "+ Add product" });
+  addBtn.addEventListener("click", () => {
+    taskGState.products.push(taskG.emptyProduct());
+    saveFreightProductCatalogToStorage(taskGState.products);
+    renderTaskGProductCatalogEditor();
+    renderTaskGOrderTable();
+  });
+  root.appendChild(addBtn);
+}
+
+// ---- Order (ordered quantities -> estimated shipment weight) ----
+
+function renderTaskGOrderTable() {
+  const root = document.getElementById("g-order-table");
+  if (!root) return;
+  root.innerHTML = "";
+  const table = h("table", { class: "data-table" });
+  const thead = h("thead", {}, [h("tr", {}, [
+    h("th", { text: "Product" }), h("th", { text: "L × W × H (cm)" }), h("th", { text: "Weight (kg)" }), h("th", { text: "Quantity" }),
+  ])]);
+  const tbody = h("tbody", {});
+  taskGState.products.forEach((p) => {
+    const tr = h("tr", {});
+    tr.appendChild(h("td", { text: p.name }));
+    tr.appendChild(h("td", { text: `${p.lengthCm} × ${p.widthCm} × ${p.heightCm}` }));
+    tr.appendChild(h("td", { text: String(p.weightKg) }));
+    const qtyInput = h("input", { type: "number", min: "0", step: "1" });
+    qtyInput.value = taskGState.quantities[p.id] || 0;
+    qtyInput.addEventListener("input", () => {
+      taskGState.quantities[p.id] = parseInt(qtyInput.value, 10) || 0;
+      renderTaskGOrderSummary();
+    });
+    tr.appendChild(h("td", {}, [qtyInput]));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(thead);
+  table.appendChild(tbody);
+  root.appendChild(table);
+  if (!taskGState.products.length) root.appendChild(h("p", { class: "warning", text: "No products in the catalogue yet — add one below." }));
+}
+
+function taskGReadCartonOverride() {
+  const val = (id) => { const v = parseFloat(document.getElementById(id).value); return v > 0 ? v : null; };
+  taskGState.cartonOverride = {
+    lengthCm: val("g-carton-l"), widthCm: val("g-carton-w"), heightCm: val("g-carton-h"),
+    grossWeightKg: val("g-carton-weight"), cartons: parseInt(document.getElementById("g-carton-count").value, 10) || 1,
+  };
+  return taskGState.cartonOverride;
+}
+
+function taskGResolveShipment() {
+  return taskG.resolveShipmentWeight({ products: taskGState.products, quantities: taskGState.quantities, cartonOverride: taskGReadCartonOverride() });
+}
+
+const TASK_G_WEIGHT_SOURCE_LABEL = {
+  catalog: "estimated from ordered quantities (product-catalogue volume/weight)",
+  mixed: "partly overridden by real carton dimensions/weight, partly estimated",
+  override: "real outer-carton dimensions and gross weight (measured, not estimated)",
+};
+
+function renderTaskGOrderSummary() {
+  const root = document.getElementById("g-order-summary");
+  if (!root) return;
+  root.innerHTML = "";
+  const shipment = taskGResolveShipment();
+  const cat = shipment.catalog;
+  root.appendChild(h("p", { class: "caption", text:
+    `Actual weight: ${cat.totalActualKg.toFixed(2)} kg  ·  Estimated volumetric weight: ${cat.volumetricKg.toFixed(2)} kg (${cat.totalVolumeCm3.toFixed(0)} cm³ ÷ 5000)  ·  Chargeable weight: ${cat.chargeableKg.toFixed(2)} kg` }));
+  root.appendChild(h("p", { class: "caption", text: `Weight source for this calculation: ${TASK_G_WEIGHT_SOURCE_LABEL[shipment.source]} — total ${shipment.totalWeightKg.toFixed(2)} kg across ${shipment.parcelCount} carton(s).` }));
+}
+
+// ---- Calculate: single warehouse, or compare all applicable warehouses ----
+
+function fmtMoneyFor(currency) {
+  return (amount) => `${amount.toFixed(2)}${currency ? " " + currency : ""}`;
+}
+
+// Renders one quote's full breakdown (weight, zone, bracket/split, cost,
+// surcharges, assumptions) into `container` — shared by the single-
+// warehouse view and each row's detail in the comparison view.
+function renderQuoteBreakdown(container, quote, card, warehouseName) {
+  const fmtMoney = fmtMoneyFor(quote.currency);
+  if (warehouseName) container.appendChild(h("p", { class: "info", text: `${warehouseName} — ${card.name}` }));
+  if (quote.expired) {
+    container.appendChild(h("p", { class: "warning", text: `⚠ This rate card expired on ${quote.expiryDate} — confirm current pricing before quoting a customer.` }));
+  }
+  const zoneHow = quote.zoneManualOverride ? "manual override" : quote.zoneAutoDetected ? "auto-detected" : "zone";
+  const rawNote = quote.zoneRaw && quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : "";
+  container.appendChild(h("p", { class: "info", text: `Origin: ${card.warehouseId}. Zone (${zoneHow}): ${quote.zone}${rawNote}.` }));
+
+  if (quote.quoteRequired) {
+    container.appendChild(h("p", { class: "error", text: `Quote required — ${quote.reason}` }));
+    return;
+  }
+
+  container.appendChild(h("p", { class: "info", text:
+    `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
+
+  if (quote.split) {
+    container.appendChild(h("p", { class: "warning", text: "⚠ Estimate only — this shipment exceeds the rate card's maximum and has been split into separately-rated consignments by weight; confirm actual packing before quoting a customer." }));
+    const splitTable = h("table", { class: "data-table" });
+    splitTable.appendChild(h("thead", {}, [h("tr", {}, [h("th", { text: "Consignment" }), h("th", { text: `Weight (${quote.weightUnit})` }), h("th", { text: "Cost" })])]));
+    const splitBody = h("tbody", {});
+    quote.split.forEach((c, i) => {
+      splitBody.appendChild(h("tr", {}, [
+        h("td", { text: `#${i + 1}` }), h("td", { text: c.weight.toFixed(2) }), h("td", { text: fmtMoney(c.cost) }),
+      ]));
+    });
+    splitTable.appendChild(splitBody);
+    container.appendChild(splitTable);
+  } else {
+    const surchargeParts = [];
+    if (quote.percentSurcharge) surchargeParts.push(`+ ${(quote.percentSurcharge * 100).toFixed(2)}% fuel/surcharge ${fmtMoney(quote.percentAmount)}`);
+    if (quote.flatSurcharge) surchargeParts.push(`+ flat surcharge ${fmtMoney(quote.flatSurcharge)}`);
+    const surchargeNote = surchargeParts.length ? ` (rate ${fmtMoney(quote.baseCost)} ${surchargeParts.join(" ")})` : "";
+    container.appendChild(h("p", { class: "info", text: `Per-parcel cost: ${fmtMoney(quote.perParcelCost)}${surchargeNote}` }));
+  }
+
+  const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${fmtMoney(quote.totalCost)}` });
+  totalP.style.fontSize = "1.25rem";
+  totalP.style.fontWeight = "800";
+  container.appendChild(totalP);
+  if (card.notes) container.appendChild(h("p", { class: "caption", text: `Rate card notes (surcharges/exclusions): ${card.notes}` }));
+}
+
+function renderTaskGComparisonTable(container, results) {
+  container.appendChild(h("p", { class: "caption", text:
+    "Cheapest priced quote highlighted. Currencies aren't converted — only compare rows in the same currency directly." }));
+  const table = h("table", { class: "data-table" });
+  table.appendChild(h("thead", {}, [h("tr", {}, [
+    h("th", { text: "Warehouse" }), h("th", { text: "Rate card" }), h("th", { text: "Zone" }), h("th", { text: "Chargeable weight" }),
+    h("th", { text: "Cost" }), h("th", { text: "Notes" }),
+  ])]));
+  const tbody = h("tbody", {});
+  // A resolved cost of exactly 0 (no surcharges either) almost always
+  // means the rate card was never filled in, not a genuinely free
+  // shipment — real quote or not, it must never win "cheapest".
+  const isUnfilled = (r) => typeof r.totalCost === "number" && r.totalCost === 0 && !r.percentAmount && !r.flatSurcharge;
+  const cheapestByCurrency = {};
+  for (const r of results) {
+    if (typeof r.totalCost !== "number" || isUnfilled(r)) continue;
+    if (cheapestByCurrency[r.currency] == null || r.totalCost < cheapestByCurrency[r.currency]) cheapestByCurrency[r.currency] = r.totalCost;
+  }
+  for (const r of results) {
+    const isCheapest = typeof r.totalCost === "number" && !isUnfilled(r) && r.totalCost === cheapestByCurrency[r.currency];
+    const tr = h("tr", isCheapest ? { class: "row-green" } : {});
+    tr.appendChild(h("td", { text: r.warehouseName }));
+    tr.appendChild(h("td", { text: r.cardName }));
+    if (r.error) {
+      tr.appendChild(h("td", { text: "—" }));
+      tr.appendChild(h("td", { text: "—" }));
+      tr.appendChild(h("td", { text: "—" }));
+      tr.appendChild(h("td", { class: "error", text: r.error }));
+    } else if (r.quoteRequired) {
+      tr.appendChild(h("td", { text: r.zone || "—" }));
+      tr.appendChild(h("td", { text: `${r.perParcelWeight.toFixed(2)} ${r.weightUnit}` }));
+      tr.appendChild(h("td", { text: "Quote required" }));
+      tr.appendChild(h("td", { text: r.reason }));
+    } else {
+      const fmtMoney = fmtMoneyFor(r.currency);
+      tr.appendChild(h("td", { text: `${r.zone}${r.zoneManualOverride ? " (manual)" : r.zoneAutoDetected ? " (auto)" : ""}` }));
+      tr.appendChild(h("td", { text: `${r.perParcelWeight.toFixed(2)} ${r.weightUnit}${r.parcelCount > 1 ? ` × ${r.parcelCount}` : ""}` }));
+      tr.appendChild(h("td", { text: fmtMoney(r.totalCost) }));
+      const notes = [];
+      if (isUnfilled(r)) notes.push("rate card appears blank/unfilled — $0.00 isn't a real quote");
+      if (r.split) notes.push("split into multiple consignments — estimate pending packing confirmation");
+      if (r.expired) notes.push("rate card expired");
+      tr.appendChild(h("td", { text: notes.join("; ") || "" }));
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  container.appendChild(table);
 }
 
 function computeTaskGQuote() {
   const resultBox = document.getElementById("g-quote-result");
   resultBox.innerHTML = "";
+
+  taskGState.destination.country = document.getElementById("g-dest-country").value.trim();
+  taskGState.destination.zip = document.getElementById("g-dest-zip").value.trim();
+  const shipment = taskGResolveShipment();
+  if (!(shipment.totalWeightKg > 0)) {
+    resultBox.appendChild(h("p", { class: "error", text: "Enter at least one ordered quantity, or a real carton gross weight, before calculating." }));
+    return;
+  }
+
+  if (taskGState.compareAll) {
+    const results = taskG.compareWarehouseQuotes({
+      rateCards: taskGState.rateCards, totalWeightKg: shipment.totalWeightKg, parcelCount: shipment.parcelCount,
+      dims: shipment.dims, dest: taskGDest(),
+    });
+    resultBox.appendChild(h("p", { class: "caption", text:
+      `Weight used: ${shipment.totalWeightKg.toFixed(2)} kg across ${shipment.parcelCount} carton(s) (${TASK_G_WEIGHT_SOURCE_LABEL[shipment.source]}).` }));
+    renderTaskGComparisonTable(resultBox, results);
+    return;
+  }
+
   const card = taskGCurrentCard();
   if (!card) { resultBox.appendChild(h("p", { class: "error", text: "Pick or add a rate card first." })); return; }
-
-  const totalWeightKg = parseFloat(document.getElementById("g-weight-kg").value);
-  const parcelCount = parseInt(document.getElementById("g-parcels").value, 10) || 1;
-  const l = parseFloat(document.getElementById("g-dim-l").value);
-  const w = parseFloat(document.getElementById("g-dim-w").value);
-  const ht = parseFloat(document.getElementById("g-dim-h").value);
-  const dimUnit = document.getElementById("g-dim-unit").value;
-  const dims = (l > 0 && w > 0 && ht > 0) ? { length: l, width: w, height: ht, unit: dimUnit } : null;
-
-  const quote = taskG.quoteFreight({ card, totalWeightKg, parcelCount, dims, dest: taskGState.dest });
+  const quote = taskG.quoteFreight({ card, totalWeightKg: shipment.totalWeightKg, parcelCount: shipment.parcelCount, dims: shipment.dims, dest: taskGDest() });
   if (quote.error) {
     resultBox.appendChild(h("p", { class: "error", text: quote.error }));
     return;
   }
-
-  const fmtMoney = (amount) => `${amount.toFixed(2)}${quote.currency ? " " + quote.currency : ""}`;
-
-  if (quote.expired) {
-    resultBox.appendChild(h("p", { class: "warning", text: `⚠ This rate card expired on ${quote.expiryDate} — confirm current pricing before quoting a customer.` }));
-  }
-  resultBox.appendChild(h("p", { class: "info", text:
-    `Chargeable weight: ${quote.perParcelWeight.toFixed(2)} ${quote.weightUnit} per parcel × ${quote.parcelCount} parcel(s)` }));
-  const surchargeParts = [];
-  if (quote.percentSurcharge) surchargeParts.push(`+ ${(quote.percentSurcharge * 100).toFixed(2)}% fuel/surcharge ${fmtMoney(quote.percentAmount)}`);
-  if (quote.flatSurcharge) surchargeParts.push(`+ flat surcharge ${fmtMoney(quote.flatSurcharge)}`);
-  const surchargeNote = surchargeParts.length ? ` (rate ${fmtMoney(quote.baseCost)} ${surchargeParts.join(" ")})` : "";
-  resultBox.appendChild(h("p", { class: "info", text:
-    `Zone/rate used: ${quote.zone}${quote.zoneRaw !== quote.zone ? ` (chart shows "${quote.zoneRaw}")` : ""} — per-parcel cost ${fmtMoney(quote.perParcelCost)}${surchargeNote}` }));
-  const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${fmtMoney(quote.totalCost)}` });
-  totalP.style.fontSize = "1.25rem";
-  totalP.style.fontWeight = "800";
-  resultBox.appendChild(totalP);
-  if (card.notes) resultBox.appendChild(h("p", { class: "caption", text: `Rate card notes: ${card.notes}` }));
+  renderQuoteBreakdown(resultBox, quote, card, null);
 }
 
 function renderTaskGRateCardEditor() {
@@ -8806,7 +9329,7 @@ function renderTaskGRateCardEditor() {
   cards.forEach((card) => {
     const isActive = card.id === taskGState.rateCardId;
     const btn = h("button", { class: isActive ? "run-btn" : "clear-btn", text: card.name });
-    btn.addEventListener("click", () => { taskGState.rateCardId = card.id; taskGState.dest = {}; renderTaskG(); });
+    btn.addEventListener("click", () => { taskGState.rateCardId = card.id; taskGState.zoneOverride = ""; renderTaskG(); });
     listWrap.appendChild(btn);
   });
   root.appendChild(listWrap);
@@ -8938,14 +9461,18 @@ function renderTaskGRateCardEditor() {
     zsSelect.value = card.zoneSource;
     zsSelect.addEventListener("change", () => {
       card.zoneSource = zsSelect.value;
-      if (card.zoneSource === "usps") {
+      // Only seed a starter 1-9 zone set for a still-untouched default
+      // card ("All") — a card that already has real zones (including
+      // Stord's own named exceptions like Hawaii/Alaska, which don't fit
+      // a plain numbered set) keeps them as-is when the source is toggled.
+      if (card.zoneSource === "usps" && card.zones.length === 1 && card.zones[0] === "All") {
         const zones = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
         card.zones = zones;
         card.countryZoneMap = {};
         for (const row of card.brackets) row.prices = Object.fromEntries(zones.map((z) => [z, row.prices[z] || 0]));
         card.perUnit = Object.fromEntries(zones.map((z) => [z, card.perUnit[z] || { base: 0, rate: 0, min: 0 }]));
       }
-      taskGState.dest = {};
+      taskGState.zoneOverride = "";
       saveFreightRateCardsToStorage(taskGState.rateCards);
       renderTaskG();
     });
@@ -8978,6 +9505,24 @@ function renderTaskGRateCardEditor() {
   cfgGrid.appendChild(pctWrap);
 
   root.appendChild(cfgGrid);
+
+  const splitWrap = h("label", { class: "checkbox-inline" });
+  const splitCb = h("input", { type: "checkbox" });
+  splitCb.checked = !!card.splitAllowed;
+  splitCb.addEventListener("change", () => { card.splitAllowed = splitCb.checked; saveFreightRateCardsToStorage(taskGState.rateCards); renderTaskG(); });
+  splitWrap.appendChild(splitCb);
+  splitWrap.appendChild(document.createTextNode(" Allow a shipment heavier than this card's own maximum bracket to be proposed as a split into multiple separately-rated consignments (rather than showing \"Quote required\")"));
+  root.appendChild(splitWrap);
+
+  if (card.splitAllowed) {
+    const physWrap = h("div", { class: "col-field" });
+    physWrap.appendChild(h("label", { text: `Carrier's physical per-consignment weight limit (optional, ${card.weightUnit} — caps each proposed consignment below the rate table's own max if lower)` }));
+    const physInput = h("input", { type: "number", min: "0", step: "0.01" });
+    physInput.value = card.maxPhysicalWeight || "";
+    physInput.addEventListener("change", () => { card.maxPhysicalWeight = parseFloat(physInput.value) || null; saveFreightRateCardsToStorage(taskGState.rateCards); });
+    physWrap.appendChild(physInput);
+    root.appendChild(physWrap);
+  }
 
   const notesWrap = h("div", { class: "col-field" });
   notesWrap.appendChild(h("label", { text: "Notes (zone definitions, surcharges not included above, service restrictions, etc.)" }));
@@ -9118,6 +9663,9 @@ function renderTaskG() {
   renderTaskGWarehouseSelect();
   renderTaskGRateCardSelect();
   renderTaskGDest();
+  renderTaskGOrderTable();
+  renderTaskGOrderSummary();
+  renderTaskGProductCatalogEditor();
   renderTaskGRateCardEditor();
 }
 
@@ -9245,15 +9793,30 @@ function init() {
   document.getElementById("g-warehouse").addEventListener("change", (e) => {
     taskGState.warehouseId = e.target.value;
     taskGState.rateCardId = null;
-    taskGState.dest = {};
+    taskGState.zoneOverride = "";
     renderTaskG();
   });
   document.getElementById("g-ratecard").addEventListener("change", (e) => {
     taskGState.rateCardId = e.target.value;
-    taskGState.dest = {};
-    renderTaskG();
+    taskGState.zoneOverride = "";
+    renderTaskGDest();
   });
-  document.getElementById("g-weight-kg").addEventListener("input", renderTaskGWeightConverted);
+  document.getElementById("g-compare-all").addEventListener("change", (e) => {
+    taskGState.compareAll = e.target.checked;
+    document.getElementById("g-warehouse").disabled = taskGState.compareAll;
+    document.getElementById("g-ratecard").disabled = taskGState.compareAll;
+    document.getElementById("g-dest").style.display = taskGState.compareAll ? "none" : "";
+  });
+  ["g-dest-country", "g-dest-zip"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", () => {
+      taskGState.destination.country = document.getElementById("g-dest-country").value.trim();
+      taskGState.destination.zip = document.getElementById("g-dest-zip").value.trim();
+      renderTaskGDest();
+    });
+  });
+  ["g-carton-l", "g-carton-w", "g-carton-h", "g-carton-weight", "g-carton-count"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", renderTaskGOrderSummary);
+  });
   document.getElementById("g-calc-btn").addEventListener("click", computeTaskGQuote);
 
   renderTaskA();

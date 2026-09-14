@@ -66,9 +66,10 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   const q3 = taskG.quoteFreight({ card, totalWeightKg: 10, parcelCount: 2, dest: { country: "Germany" } });
   assert(!q3.error && close(q3.perParcelCost, 35) && close(q3.totalCost, 70), `DE 10kg/2 parcels, got ${JSON.stringify(q3)}`);
 
-  // Weight beyond every bracket -> error, not a silent 0/NaN.
+  // Weight beyond every bracket, splitting not enabled (the default) ->
+  // "quote required", not a silent 0/NaN and not a bare error either.
   const qOver = taskG.quoteFreight({ card, totalWeightKg: 100, parcelCount: 1, dest: { country: "Germany" } });
-  assert(!!qOver.error, `weight beyond all brackets should error, got ${JSON.stringify(qOver)}`);
+  assert(qOver.quoteRequired === true && !qOver.error, `weight beyond all brackets with splitting disabled should be "quote required", got ${JSON.stringify(qOver)}`);
 
   // Country with no mapping and no explicit zone -> error, not a guess.
   const qUnmapped = taskG.quoteFreight({ card, totalWeightKg: 3, parcelCount: 1, dest: { country: "Spain" } });
@@ -557,6 +558,195 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   const qStdDduCanada = taskG.quoteFreight({ card: standardDdu, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "Canada (Major)" } });
   assert(!qStdDduCanada.error && close(qStdDduCanada.perParcelCost, 14.07), `Stord Standard DDU 1lb to Canada (Major), got ${JSON.stringify(qStdDduCanada)}`);
   assert(standardDdu.zones.every((z) => z.length > 3 || /^Canada/.test(z)), `Standard DDU zones should be full country names, not 2-letter codes, got a sample: ${JSON.stringify(standardDdu.zones.slice(0, 10))}`);
+}
+
+// ==================================================================
+// Product catalog, order-based weight, shipment splitting, Stord's
+// named-zone auto-detection, and multi-warehouse comparison — added
+// 2026-09-17 per the user's request to calculate from ordered
+// quantities instead of a hand-computed shipment weight.
+// ==================================================================
+
+// ---- defaultProductCatalog() / computeOrderWeights() ----
+{
+  const products = taskG.defaultProductCatalog();
+  assert(products.length === 7, `default catalog should have the 7 seeded products, got ${products.length}`);
+  const starterKit = products.find((p) => p.name === "Essential Starter Kit");
+  assert(starterKit && close(starterKit.lengthCm, 31) && close(starterKit.widthCm, 15) && close(starterKit.heightCm, 27) && close(starterKit.weightKg, 1.8),
+    `Essential Starter Kit dims/weight, got ${JSON.stringify(starterKit)}`);
+  assert(products.every((p) => p.id && new Set(products.map((x) => x.id)).size === products.length), "every product should have a unique id");
+
+  // 2x Essential Starter Kit (31x15x27cm, 1.8kg) + 10x Essential Trial
+  // Pack (11x15x2.5cm, 0.1kg): actual = 2*1.8 + 10*0.1 = 4.6kg;
+  // volume = 2*(31*15*27) + 10*(11*15*2.5) = 2*12555 + 10*412.5 = 29235cm³;
+  // volumetric = 29235/5000 = 5.847kg > actual -> chargeable = volumetric.
+  const trialPack = products.find((p) => p.name === "Essential Trial Pack (7ct)");
+  const order = taskG.computeOrderWeights(products, { [starterKit.id]: 2, [trialPack.id]: 10 });
+  assert(close(order.totalActualKg, 4.6), `total actual weight, got ${order.totalActualKg}`);
+  assert(close(order.totalVolumeCm3, 29235), `total volume, got ${order.totalVolumeCm3}`);
+  assert(close(order.volumetricKg, 5.847), `volumetric weight (cm3/5000), got ${order.volumetricKg}`);
+  assert(close(order.chargeableKg, 5.847), `chargeable = greater of actual/volumetric, got ${order.chargeableKg}`);
+  assert(order.lines.length === 2, `only the 2 ordered products should appear as lines, got ${order.lines.length}`);
+
+  // Essential Refills (13x15x10.5cm, 0.5kg) is dense enough (0.5kg /
+  // 2047.5cm³ ≈ 0.244 g/cm³, above the 0.2 g/cm³ break-even at a /5000
+  // divisor) that actual weight should dominate over volumetric here.
+  const refill = products.find((p) => p.name === "Essential Refills (30ct)");
+  const heavyOnly = taskG.computeOrderWeights(products, { [refill.id]: 100 });
+  assert(close(heavyOnly.totalActualKg, 50) && heavyOnly.chargeableKg === heavyOnly.totalActualKg && heavyOnly.chargeableKg > heavyOnly.volumetricKg,
+    `actual weight should dominate for a dense order, got ${JSON.stringify(heavyOnly)}`);
+
+  // Zero/absent quantities contribute nothing, and don't throw.
+  const empty = taskG.computeOrderWeights(products, {});
+  assert(empty.totalActualKg === 0 && empty.chargeableKg === 0, "an empty order should compute to zero, not NaN/throw");
+}
+
+// ---- resolveShipmentWeight(): catalog estimate vs. real carton override ----
+{
+  const products = taskG.defaultProductCatalog();
+  const starterKit = products.find((p) => p.name === "Essential Starter Kit");
+
+  // No override at all -> pure catalog estimate feeds totalWeightKg, no dims.
+  const catalogOnly = taskG.resolveShipmentWeight({ products, quantities: { [starterKit.id]: 2 }, cartonOverride: {} });
+  assert(catalogOnly.source === "catalog" && close(catalogOnly.totalWeightKg, catalogOnly.catalog.chargeableKg) && !catalogOnly.dims,
+    `no override -> catalog estimate drives the weight, got ${JSON.stringify(catalogOnly)}`);
+
+  // Real gross weight given (no dims) -> overrides the catalog weight
+  // entirely, per carton, but no volumetric-vs-actual dims comparison.
+  const weightOverride = taskG.resolveShipmentWeight({ products, quantities: { [starterKit.id]: 2 }, cartonOverride: { grossWeightKg: 4, cartons: 2 } });
+  assert(weightOverride.source !== "catalog" && close(weightOverride.totalWeightKg, 8) && weightOverride.parcelCount === 2,
+    `gross weight override (4kg x 2 cartons) should win over the catalog estimate, got ${JSON.stringify(weightOverride)}`);
+
+  // Real outer-carton dims given -> passed through as dims for the
+  // card's own dimDivisor-based volumetric calc downstream, catalog
+  // weight still used as the "actual" baseline unless gross weight is
+  // also given.
+  const dimsOnly = taskG.resolveShipmentWeight({ products, quantities: { [starterKit.id]: 1 }, cartonOverride: { lengthCm: 40, widthCm: 30, heightCm: 20 } });
+  assert(dimsOnly.dims && close(dimsOnly.dims.length, 40) && dimsOnly.dims.unit === "cm" && dimsOnly.source === "mixed",
+    `real carton dims should be passed through as dims (unit cm), got ${JSON.stringify(dimsOnly)}`);
+
+  // Both dims and gross weight given -> full override, one carton default.
+  const fullOverride = taskG.resolveShipmentWeight({ products, quantities: {}, cartonOverride: { lengthCm: 50, widthCm: 40, heightCm: 30, grossWeightKg: 12 } });
+  assert(fullOverride.source === "override" && close(fullOverride.totalWeightKg, 12) && fullOverride.parcelCount === 1 && fullOverride.dims,
+    `full carton override, got ${JSON.stringify(fullOverride)}`);
+}
+
+// ---- cardRateTableMaxWeight() / proposeSplitConsignments() ----
+{
+  const card = taskG.emptyManualCard("US_STORD_ATL", "split test card", "kg", "cm");
+  card.brackets = [{ min: 0, max: 20, prices: { All: 10 } }, { min: 20.01, max: 200, prices: { All: 50 } }];
+  assert(taskG.cardRateTableMaxWeight(card) === 200, `should read the top bracket's max, got ${taskG.cardRateTableMaxWeight(card)}`);
+
+  // The worked example from the spec: 200kg max, 300kg shipment -> [200, 100].
+  const split = taskG.proposeSplitConsignments(300, 200);
+  assert(split.length === 2 && close(split[0], 200) && close(split[1], 100), `300kg over a 200kg max, got ${JSON.stringify(split)}`);
+
+  // An exact multiple of the max splits evenly with no tiny remainder consignment.
+  const evenSplit = taskG.proposeSplitConsignments(400, 200);
+  assert(evenSplit.length === 2 && close(evenSplit[0], 200) && close(evenSplit[1], 200), `400kg over a 200kg max (exact multiple), got ${JSON.stringify(evenSplit)}`);
+
+  // Not actually over the max at all in the first place -> a trivial single-consignment "split".
+  const noSplitNeeded = taskG.proposeSplitConsignments(150, 200);
+  assert(noSplitNeeded.length === 1 && close(noSplitNeeded[0], 150), `under the max needs no real split, got ${JSON.stringify(noSplitNeeded)}`);
+
+  // No usable max -> null, not a throw or an infinite loop.
+  assert(taskG.proposeSplitConsignments(300, 0) === null, "a zero/missing max should return null, not loop forever");
+  assert(taskG.proposeSplitConsignments(300, null) === null, "a null max should return null");
+}
+
+// ---- Split-shipment quoting end to end, including per-consignment surcharges ----
+{
+  const card = taskG.emptyManualCard("US_STORD_ATL", "split quote test card", "kg", "cm", "USD");
+  card.brackets = [{ min: 0, max: 200, prices: { All: 100 } }];
+  card.flatSurcharge = 5; // should apply PER CONSIGNMENT, not once overall
+  card.splitAllowed = true;
+
+  // 300kg over a 200kg max -> [200, 100], each still costs the flat 100
+  // (the only bracket covers 0-200, so both the 200kg and 100kg
+  // consignments price at the same flat 100) + 5 flat surcharge each.
+  const q = taskG.quoteFreight({ card, totalWeightKg: 300, parcelCount: 1, dest: { zone: "All" } });
+  assert(!q.error && !q.quoteRequired, `split quote should succeed, got ${JSON.stringify(q)}`);
+  assert(Array.isArray(q.split) && q.split.length === 2, `should propose 2 consignments, got ${JSON.stringify(q.split)}`);
+  assert(close(q.split[0].weight, 200) && close(q.split[0].cost, 105), `first consignment (200kg, +flat 5), got ${JSON.stringify(q.split[0])}`);
+  assert(close(q.split[1].weight, 100) && close(q.split[1].cost, 105), `second consignment (100kg, +flat 5), got ${JSON.stringify(q.split[1])}`);
+  assert(close(q.perParcelCost, 210) && close(q.totalCost, 210), `combined total = 105 + 105, got perParcelCost=${q.perParcelCost} totalCost=${q.totalCost}`);
+  assert(q.packingConfirmationRequired === true, "a split-based quote must be labelled as needing packing confirmation");
+
+  // splitAllowed: false on the same over-max shipment -> "quote required", not a guess.
+  const cardNoSplit = { ...card, splitAllowed: false };
+  const qNoSplit = taskG.quoteFreight({ card: cardNoSplit, totalWeightKg: 300, parcelCount: 1, dest: { zone: "All" } });
+  assert(qNoSplit.quoteRequired === true, `splitting disabled should be quote-required, got ${JSON.stringify(qNoSplit)}`);
+
+  // maxPhysicalWeight lower than the rate table's own max caps each
+  // consignment further (e.g. a carrier's real per-parcel limit of 120kg,
+  // even though the rate table itself lists brackets up to 200kg).
+  const cardPhysicalCap = { ...card, maxPhysicalWeight: 120 };
+  const qCapped = taskG.quoteFreight({ card: cardPhysicalCap, totalWeightKg: 300, parcelCount: 1, dest: { zone: "All" } });
+  assert(qCapped.split.every((c) => c.weight <= 120 + 1e-6), `every consignment should respect the lower physical cap (120kg), got ${JSON.stringify(qCapped.split)}`);
+}
+
+// ---- resolveStordNamedZone(): Hawaii/Alaska/Puerto Rico/APO-FPO/territories by ZIP3 ----
+{
+  assert(taskG.resolveStordNamedZone("96815") === "Hawaii", "Honolulu HI (967-968) -> Hawaii");
+  assert(taskG.resolveStordNamedZone("99501") === "Alaska", "Anchorage AK (995-999) -> Alaska");
+  assert(taskG.resolveStordNamedZone("00901") === "Puerto Rico", "San Juan PR (006-009) -> Puerto Rico");
+  assert(taskG.resolveStordNamedZone("34001") === "APO/FPO", "AA military ZIP (340) -> APO/FPO");
+  assert(taskG.resolveStordNamedZone("09001") === "APO/FPO", "AE military ZIP (090-098) -> APO/FPO");
+  assert(taskG.resolveStordNamedZone("96910") === "Other US Territories", "Guam (969) -> Other US Territories");
+  assert(taskG.resolveStordNamedZone("30301") === null, "a plain continental US ZIP should fall through to the numbered USPS zone lookup");
+  assert(taskG.resolveStordNamedZone("123") === null, "a too-short ZIP should return null, not throw");
+}
+
+// ---- Stord's real domestic cards: automatic USPS zone lookup + named-zone handling ----
+{
+  const defaults = taskG.defaultRateCards();
+  const econ = defaults.US_STORD_ATL.find((c) => c.name === "Stord Economy");
+  assert(econ.zoneSource === "usps" && econ.splitAllowed === true, `Stord Economy should auto-detect zone and allow splitting, got zoneSource=${econ.zoneSource} splitAllowed=${econ.splitAllowed}`);
+
+  // A plain continental destination resolves automatically, no manual zone needed.
+  const qAuto = taskG.quoteFreight({ card: econ, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zip: "90210" } });
+  assert(!qAuto.error && qAuto.zone === "8" && qAuto.zoneAutoDetected === true && !qAuto.zoneManualOverride,
+    `auto-detected zone for a continental ZIP, got ${JSON.stringify(qAuto)}`);
+
+  // Hawaii resolves automatically too, since Economy has a plain "Hawaii" zone.
+  const qHawaii = taskG.quoteFreight({ card: econ, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zip: "96815" } });
+  assert(!qHawaii.error && qHawaii.zone === "Hawaii" && qHawaii.zoneAutoDetected === true, `Hawaii should auto-resolve on Economy, got ${JSON.stringify(qHawaii)}`);
+
+  // Second Day only has Metro/Rural splits for Alaska/Hawaii — auto-detection
+  // must refuse to guess between them rather than silently picking one.
+  const secondDay = defaults.US_STORD_ATL.find((c) => c.name === "Stord Second Day");
+  const qAmbiguous = taskG.quoteFreight({ card: secondDay, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zip: "96815" } });
+  assert(!!qAmbiguous.error && /manually/i.test(qAmbiguous.error), `ambiguous Metro/Rural zone should refuse to guess, got ${JSON.stringify(qAmbiguous)}`);
+  // ...but a manual zone override still works and is labelled as such.
+  const qManual = taskG.quoteFreight({ card: secondDay, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zip: "96815", zone: "Hawaii Metro" } });
+  assert(!qManual.error && qManual.zone === "Hawaii Metro" && qManual.zoneManualOverride === true && !qManual.zoneAutoDetected,
+    `manual override should be honored and labelled, got ${JSON.stringify(qManual)}`);
+
+  // Splitting a real Stord card over its own max, end to end.
+  const groundComm = defaults.US_STORD_ATL.find((c) => c.name === "Stord Ground Standard (Commercial)");
+  const qSplit = taskG.quoteFreight({ card: groundComm, totalWeightKg: taskG.convertWeight(300, "lb", "kg"), parcelCount: 1, dest: { zip: "90210" } });
+  assert(!qSplit.error && qSplit.split && qSplit.split.length === 2 && close(qSplit.totalCost, 192.76),
+    `300lb over Ground Standard Commercial's 150lb max should split into 2 x 150lb, got ${JSON.stringify(qSplit)}`);
+}
+
+// ---- compareWarehouseQuotes(): cross-warehouse comparison, cheapest first ----
+{
+  const rateCards = taskG.defaultRateCards();
+  const results = taskG.compareWarehouseQuotes({
+    rateCards, warehouseIds: ["US_STORD_ATL", "US_STORD_RNO"],
+    totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zip: "90210" },
+  });
+  assert(results.length > 0, "comparing Stord ATL + RNO should return results for every card on both");
+  assert(results.some((r) => r.warehouseId === "US_STORD_ATL") && results.some((r) => r.warehouseId === "US_STORD_RNO"),
+    "results should cover both requested warehouses");
+  // Priced results should come first, sorted cheapest-first.
+  const priced = results.filter((r) => typeof r.totalCost === "number");
+  for (let i = 1; i < priced.length; i++) assert(priced[i].totalCost >= priced[i - 1].totalCost, "priced results should be sorted cheapest-first");
+  // A card with no destination match for this route (e.g. an
+  // international-only card given a domestic ZIP-only dest) should still
+  // appear as an error/quote-required entry, not vanish from the list.
+  const unresolved = results.filter((r) => typeof r.totalCost !== "number");
+  assert(unresolved.every((r) => r.error || r.quoteRequired), "every non-priced result should carry an error or quoteRequired reason, not just disappear");
 }
 
 if (!ok) {

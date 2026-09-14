@@ -529,6 +529,7 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
 .ops2-how p { margin: 8px 0 0; }
 
 .ops2-hr { height: 2px; border: 0; margin: 0; background: var(--ops-divider); }
+.ops2-step { margin: 14px 0 4px; font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ops-accent); }
 
 .ops2-required-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .ops2-required-head h6 { margin: 0; font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
@@ -1117,13 +1118,35 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
       <div class="ops2-heading">
         <div class="ops2-eyebrow">Task G</div>
         <h2>B2B Freight Cost Calculator</h2>
-        <p class="task-lede">Estimates outbound freight cost for a B2B order, so you can quote a customer.</p>
+        <p class="task-lede">Enter a destination and ordered quantities, then estimate shipping cost from one warehouse — or compare all of them.</p>
         <details class="task-detail ops2-how"><summary>How this works</summary>
-          <p>Enter the counted weight in kg (converted to the rate card's own unit automatically), pick the shipping warehouse and its rate card, and the destination. Rate cards are your own data — maintained below and saved in this browser, never guessed at. Stord's US domestic cards price by USPS zone (1-9), computed automatically from the shipping warehouse's ZIP and the destination ZIP using a baked-in USPS zone chart; other warehouses' cards resolve a destination country/zone you define.</p>
+          <p>Shipment weight is estimated from the ordered quantities below (actual weight vs. estimated volumetric weight — greater of the two wins), unless you enter real outer-carton dimensions/gross weight once packed, which override the estimate. The destination country and ZIP/postal code resolve a rate card's zone automatically where possible (Stord's US domestic cards use the real USPS zone chart, by ZIP) — a manual override is always available and is clearly labelled when used, never silently assumed. A shipment heavier than a rate card's own maximum is proposed as a split into multiple consignments where the card allows it; otherwise it's marked "Quote required" rather than guessed at. Rate cards and the product catalogue are your own data — maintained below and saved in this browser.</p>
         </details>
       </div>
       <hr class="ops2-hr">
 
+      <h6 class="ops2-step">1 · Destination</h6>
+      <div class="col-grid">
+        <div class="col-field"><label>Destination country</label><input type="text" id="g-dest-country" placeholder="e.g. United States, Germany, Canada"></div>
+        <div class="col-field"><label>Destination ZIP / postal code</label><input type="text" id="g-dest-zip" placeholder="5-digit US ZIP for Stord auto-zone"></div>
+      </div>
+
+      <h6 class="ops2-step">2 · Ordered quantities</h6>
+      <div id="g-order-table"></div>
+      <div id="g-order-summary"></div>
+      <details class="task-detail">
+        <summary>Actual outer-carton dimensions &amp; gross weight (optional — overrides the estimate once packed)</summary>
+        <div class="col-grid">
+          <div class="col-field"><label>Length (cm)</label><input type="number" id="g-carton-l" min="0" step="0.1"></div>
+          <div class="col-field"><label>Width (cm)</label><input type="number" id="g-carton-w" min="0" step="0.1"></div>
+          <div class="col-field"><label>Height (cm)</label><input type="number" id="g-carton-h" min="0" step="0.1"></div>
+          <div class="col-field"><label>Gross weight per carton (kg)</label><input type="number" id="g-carton-weight" min="0" step="0.01"></div>
+          <div class="col-field"><label>Number of cartons</label><input type="number" id="g-carton-count" min="1" step="1" value="1"></div>
+        </div>
+        <p class="caption">When given, these override the product-catalogue estimate above, per carton.</p>
+      </details>
+
+      <h6 class="ops2-step">3 · Warehouse</h6>
       <div class="col-grid">
         <div class="col-field">
           <label>Shipping warehouse</label>
@@ -1134,37 +1157,17 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
           <select id="g-ratecard"></select>
         </div>
       </div>
-
+      <label class="checkbox-inline"><input type="checkbox" id="g-compare-all"> Compare all applicable warehouses instead of just the one selected above</label>
       <div id="g-dest"></div>
 
-      <div class="col-grid">
-        <div class="col-field">
-          <label>Total counted weight (kg)</label>
-          <input type="number" id="g-weight-kg" min="0" step="0.01" placeholder="e.g. 12.5">
-        </div>
-        <div class="col-field">
-          <label>Number of parcels/boxes</label>
-          <input type="number" id="g-parcels" min="1" step="1" value="1">
-        </div>
-      </div>
-      <p class="caption" id="g-weight-converted"></p>
-
-      <details class="task-detail">
-        <summary>Package dimensions (optional — only needed if the rate card charges on volumetric/dimensional weight)</summary>
-        <div class="col-grid">
-          <div class="col-field"><label>Length</label><input type="number" id="g-dim-l" min="0" step="0.1"></div>
-          <div class="col-field"><label>Width</label><input type="number" id="g-dim-w" min="0" step="0.1"></div>
-          <div class="col-field"><label>Height</label><input type="number" id="g-dim-h" min="0" step="0.1"></div>
-          <div class="col-field">
-            <label>Unit</label>
-            <select id="g-dim-unit"><option value="cm">cm</option><option value="in">in</option></select>
-          </div>
-        </div>
-        <p class="caption">Dimensions are per parcel. Only used if the selected rate card has a volumetric divisor set (see rate card editor below).</p>
-      </details>
-
+      <h6 class="ops2-step">4 · Calculate</h6>
       <button type="button" class="run-btn" id="g-calc-btn">Calculate freight cost</button>
       <div id="g-quote-result"></div>
+
+      <hr class="ops2-hr">
+      <details class="task-detail"><summary>Product catalogue (edit defaults, add new products)</summary>
+        <div id="g-product-catalog-editor"></div>
+      </details>
 
       <hr class="ops2-hr">
       <div id="g-ratecard-editor"></div>
@@ -1172,11 +1175,11 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
     <section class="ops2-right">
       <div class="ops2-empty">
         <h6>Output</h6>
-        <div class="ops2-empty-title">Fill in a rate card below, then calculate.</div>
+        <div class="ops2-empty-title">Enter a destination and quantities, then calculate.</div>
         <div class="ops2-preview">
-          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Chargeable weight per parcel (actual vs. volumetric, whichever is greater)</span></div>
-          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Zone/rate used and per-parcel cost</span></div>
-          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Total estimated freight cost for the shipment</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Actual, volumetric, and chargeable weight, with the source (order estimate vs. carton override)</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Zone (auto-detected or manual override), rate bracket or proposed split, and cost</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">A full warehouse comparison, cheapest highlighted, when comparing all</span></div>
         </div>
       </div>
     </section>
