@@ -318,22 +318,36 @@ h4 { font-size: 0.8rem; font-weight: 800; margin: 14px 0 4px; text-transform: up
 }
 .tab-button.active .tab-text small { background: var(--ops-accent); color: #fff; }
 
-.main-content, .side-nav.collapsed ~ .main-content { margin-left: 0; max-width: 1180px; padding: 22px 28px 0; }
+.main-content, .side-nav.collapsed ~ .main-content { margin-left: 0; max-width: 1600px; padding: 22px 28px 0; }
 .tab-panel.active { animation: none; }
 .tab-panel > p:first-of-type { font-size: 0.86rem; color: var(--ink-soft); max-width: 90ch; margin: 0 0 14px; }
 
 /* ── Upload cards become one flat row per file: name + hint left, control right ── */
 .columns2, .columns3 { display: block; margin: 0 0 14px; }
-.upload-box, .file-box {
+.upload-box {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 20px; align-items: start;
   padding: 12px 0; margin: 0; background: none; border: 0; border-top: 1px solid var(--ops-divider);
   border-radius: 0; box-shadow: none; backdrop-filter: none; animation: none;
 }
 .upload-box:hover { transform: none; box-shadow: none; }
-.upload-box > h3, .file-box > h3 { grid-column: 1; }
+.upload-box > h3 { grid-column: 1; }
 .upload-box > .caption, .upload-box > .file-desc { grid-column: 1; }
 .upload-box > .file-row, .upload-box > input[type="file"] { grid-column: 2; grid-row: 1 / span 2; justify-self: end; }
 .upload-box > div[id], .upload-box > details, .upload-box > textarea, .upload-box > select { grid-column: 1 / -1; }
+/* .file-box: the per-file info wrapper shown when multiple fulfillment
+   reports are uploaded (Task B/C) — a plain stacked block (title, caption,
+   collapsible column-mapping details), never a file-input control, so it
+   never needs .upload-box's 2-column grid. It used to just inherit that
+   grid with none of the column-assignment rules above actually matching
+   its own children (h4/.caption/details, not h3/.file-row) — leaving them
+   to CSS Grid's auto-placement, which squeezed everything into a sliver of
+   the "auto" track instead of the full row width. */
+.file-box {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 0; margin: 0;
+  background: none; border: 0; border-top: 1px solid var(--ops-divider); border-radius: 0;
+  box-shadow: none; backdrop-filter: none; animation: none;
+}
+.file-box > h4 { margin: 0; }
 .file-row { justify-content: flex-end; gap: 10px; }
 .file-row input[type="file"] { flex: 0 1 auto; }
 input[type="file"] { margin: 0; font-size: 0.78rem; max-width: 260px; }
@@ -400,7 +414,7 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
   .tab-text small { display: inline-block; }
 }
 @media (max-width: 820px) {
-  .upload-box, .file-box { grid-template-columns: minmax(0, 1fr); }
+  .upload-box { grid-template-columns: minmax(0, 1fr); }
   .upload-box > .file-row, .upload-box > input[type="file"] { grid-column: 1; grid-row: auto; justify-self: start; margin-top: 6px; }
   .main-content, .side-nav.collapsed ~ .main-content { padding: 18px 16px 0; }
 }
@@ -6416,7 +6430,10 @@ function renderTable(rows, container, limit, rowClassFn, boldColumns) {
   );
   table.appendChild(thead);
   table.appendChild(tbody);
-  container.appendChild(table);
+  // A wide result table (many original columns preserved, e.g. Task C's
+  // dispatch check) must scroll inside its own box, never force the whole
+  // page to scroll horizontally.
+  container.appendChild(h("div", { class: "data-table-wrap" }, [table]));
   if (limit && rows.length > limit) {
     container.appendChild(h("p", { class: "muted", text: `... and ${rows.length - limit} more rows (full data is in the downloaded file)` }));
   }

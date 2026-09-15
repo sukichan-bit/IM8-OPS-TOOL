@@ -165,7 +165,10 @@ function renderTable(rows, container, limit, rowClassFn, boldColumns) {
   );
   table.appendChild(thead);
   table.appendChild(tbody);
-  container.appendChild(table);
+  // A wide result table (many original columns preserved, e.g. Task C's
+  // dispatch check) must scroll inside its own box, never force the whole
+  // page to scroll horizontally.
+  container.appendChild(h("div", { class: "data-table-wrap" }, [table]));
   if (limit && rows.length > limit) {
     container.appendChild(h("p", { class: "muted", text: `... and ${rows.length - limit} more rows (full data is in the downloaded file)` }));
   }
