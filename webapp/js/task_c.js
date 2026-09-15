@@ -272,11 +272,14 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
 
   // Per-order facts (status/tracking/shipped date) from the match, keyed by
   // the same join key — multiple lines per order all carry the same values.
+  // order_status (task_b.js's pickStatus) is 3-way: "Shipped" / "Partially
+  // Shipped" / "Not Fulfilled" — mapped 1:1 to this tool's own 3-way label.
   const perOrder = new Map();
   for (const r of matched) {
     if (!perOrder.has(r.key)) {
       perOrder.set(r.key, {
-        dispatched: r.order_status !== "Not Fulfilled",
+        status:
+          r.order_status === "Shipped" ? "Dispatched" : r.order_status === "Partially Shipped" ? "Partially Dispatched" : "Not Dispatched",
         tracking_number: r.tracking_number,
         shipped_date: r.shipped_date,
       });
@@ -299,11 +302,11 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
 
   const outRows = refundCancelRows.map((row, i) => {
     const key = soKeys[i];
-    const info = perOrder.get(key) || { dispatched: false, tracking_number: null, shipped_date: null };
+    const info = perOrder.get(key) || { status: "Not Dispatched", tracking_number: null, shipped_date: null };
     const isService = isServiceSku(row[cols.item]);
     const out = { ...row };
-    if (info.dispatched) {
-      out.__dispatch_status = "Dispatched";
+    if (info.status !== "Not Dispatched") {
+      out.__dispatch_status = info.status; // "Dispatched" or "Partially Dispatched"
       out.__shipped_date_raw = info.shipped_date;
       out["Shipped date"] = fmtMMDDYYYY(info.shipped_date);
       out["Tracking number"] = isService ? "" : info.tracking_number || "";
@@ -331,6 +334,11 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
     else if (orderStatusCheck.get(so) !== row.__dispatch_status) splitOrders.push(so);
   }
 
+  // Not an actual Excel sheet name (never written to a workbook directly —
+  // the caller re-splits it on " - " to get warehouse/status back out), so
+  // it must never be truncated to Excel's 31-char sheet-name limit here:
+  // doing so used to silently mangle "Partially Dispatched" down to
+  // "Partially Dispatch", corrupting the status the caller re-parses.
   const perSheet = {};
   const byWarehouseStatus = new Map();
   for (const row of outRows) {
@@ -339,8 +347,7 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
     byWarehouseStatus.get(sheetKey).push(row);
   }
   for (const [sheetKey, rows] of byWarehouseStatus.entries()) {
-    const safeName = sheetKey.length > 31 ? sheetKey.slice(0, 31) : sheetKey;
-    perSheet[safeName] = rows;
+    perSheet[sheetKey] = rows;
   }
 
   const unresolvedRefundDates = outRows.filter((r) => r.__dispatch_status === "Not Dispatched" && !r.__refund_date_resolution?.resolved);

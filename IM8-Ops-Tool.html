@@ -398,6 +398,7 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
 
 .status-chip { border-radius: 0; padding: 2px 9px; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.02em; }
 .status-chip-dispatched { background: rgba(20, 83, 45, 0.12); color: #14532d; }
+.status-chip-partial { background: rgba(180, 120, 0, 0.12); color: #6b4600; }
 .status-chip-not-dispatched { background: rgba(179, 38, 30, 0.12); color: #8a1c16; }
 
 /* ── Loading overlay ── */
@@ -2718,11 +2719,14 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
 
   // Per-order facts (status/tracking/shipped date) from the match, keyed by
   // the same join key — multiple lines per order all carry the same values.
+  // order_status (task_b.js's pickStatus) is 3-way: "Shipped" / "Partially
+  // Shipped" / "Not Fulfilled" — mapped 1:1 to this tool's own 3-way label.
   const perOrder = new Map();
   for (const r of matched) {
     if (!perOrder.has(r.key)) {
       perOrder.set(r.key, {
-        dispatched: r.order_status !== "Not Fulfilled",
+        status:
+          r.order_status === "Shipped" ? "Dispatched" : r.order_status === "Partially Shipped" ? "Partially Dispatched" : "Not Dispatched",
         tracking_number: r.tracking_number,
         shipped_date: r.shipped_date,
       });
@@ -2745,11 +2749,11 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
 
   const outRows = refundCancelRows.map((row, i) => {
     const key = soKeys[i];
-    const info = perOrder.get(key) || { dispatched: false, tracking_number: null, shipped_date: null };
+    const info = perOrder.get(key) || { status: "Not Dispatched", tracking_number: null, shipped_date: null };
     const isService = isServiceSku(row[cols.item]);
     const out = { ...row };
-    if (info.dispatched) {
-      out.__dispatch_status = "Dispatched";
+    if (info.status !== "Not Dispatched") {
+      out.__dispatch_status = info.status; // "Dispatched" or "Partially Dispatched"
       out.__shipped_date_raw = info.shipped_date;
       out["Shipped date"] = fmtMMDDYYYY(info.shipped_date);
       out["Tracking number"] = isService ? "" : info.tracking_number || "";
@@ -2777,6 +2781,11 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
     else if (orderStatusCheck.get(so) !== row.__dispatch_status) splitOrders.push(so);
   }
 
+  // Not an actual Excel sheet name (never written to a workbook directly —
+  // the caller re-splits it on " - " to get warehouse/status back out), so
+  // it must never be truncated to Excel's 31-char sheet-name limit here:
+  // doing so used to silently mangle "Partially Dispatched" down to
+  // "Partially Dispatch", corrupting the status the caller re-parses.
   const perSheet = {};
   const byWarehouseStatus = new Map();
   for (const row of outRows) {
@@ -2785,8 +2794,7 @@ function computeDispatchCheck(refundCancelRows, cols, fulfillmentRows, fulfillme
     byWarehouseStatus.get(sheetKey).push(row);
   }
   for (const [sheetKey, rows] of byWarehouseStatus.entries()) {
-    const safeName = sheetKey.length > 31 ? sheetKey.slice(0, 31) : sheetKey;
-    perSheet[safeName] = rows;
+    perSheet[sheetKey] = rows;
   }
 
   const unresolvedRefundDates = outRows.filter((r) => r.__dispatch_status === "Not Dispatched" && !r.__refund_date_resolution?.resolved);
@@ -6439,13 +6447,15 @@ function renderTable(rows, container, limit, rowClassFn, boldColumns) {
   }
 }
 
-// Small colored pill for "Dispatched" (green) / "Not Dispatched" (pink) —
-// same palette as the row-green/row-red table highlight, so status reads
-// consistently in prose, headers, and table rows alike.
+// Small colored pill for "Dispatched" (green) / "Partially Dispatched"
+// (amber) / "Not Dispatched" (pink) — same palette as the row-green/
+// row-amber/row-red table highlights, so status reads consistently in
+// prose, headers, and table rows alike.
 function statusChip(status) {
-  const isDispatched = status === "Dispatched";
+  const cls =
+    status === "Dispatched" ? "status-chip-dispatched" : status === "Partially Dispatched" ? "status-chip-partial" : "status-chip-not-dispatched";
   return h("span", {
-    class: `status-chip ${isDispatched ? "status-chip-dispatched" : "status-chip-not-dispatched"}`,
+    class: `status-chip ${cls}`,
     text: status,
   });
 }
@@ -7738,36 +7748,51 @@ function renderTaskC() {
       text: "For every refund/cancel order line, confirms whether it actually shipped by matching against the warehouse fulfillment report(s) — this is the working data Steps 5-7 build from, not itself a D365 import file.",
     })
   );
-  // Steps 5-7 further below reuse these same two arrays (built once here).
-  const dispatchedRows = allOutRows.filter((r) => r.__dispatch_status === "Dispatched");
+  // Steps 5-7 further below need "shipped at least something" — Partially
+  // Dispatched orders still need Step 5's D365 fulfillment template (for
+  // the units that did ship, flagged as partial) and must NOT fall into
+  // Step 6's never-shipped inventory-adjustment journal.
+  const dispatchedRows = allOutRows.filter((r) => r.__dispatch_status !== "Not Dispatched");
   const notDispatchedRows = allOutRows.filter((r) => r.__dispatch_status === "Not Dispatched");
   const orderKeyOf = (r) => (r[cols.salesOrder] != null ? r[cols.salesOrder] : r[cols.shopifyRef]);
-  const dispatchedOrderCount = new Set(dispatchedRows.map(orderKeyOf)).size;
-  const notDispatchedOrderCount = new Set(notDispatchedRows.map(orderKeyOf)).size;
-  root.appendChild(
-    h("p", { class: "caption" }, [
-      `${dispatchedOrderCount + notDispatchedOrderCount} order(s) checked — ${dispatchedOrderCount} `,
-      statusChip("Dispatched"),
-      ` (${dispatchedRows.length} line(s)), ${notDispatchedOrderCount} `,
-      statusChip("Not Dispatched"),
-      ` (${notDispatchedRows.length} line(s)).`,
-    ])
-  );
+  const STATUS_ORDER = ["Dispatched", "Partially Dispatched", "Not Dispatched"];
+  const statusRank = (s) => { const i = STATUS_ORDER.indexOf(s); return i === -1 ? STATUS_ORDER.length : i; };
+  const statusCounts = STATUS_ORDER.map((status) => {
+    const rows = allOutRows.filter((r) => r.__dispatch_status === status);
+    return { status, orderCount: new Set(rows.map(orderKeyOf)).size, lineCount: rows.length };
+  }).filter((s) => s.lineCount > 0);
+  const totalOrders = statusCounts.reduce((s, c) => s + c.orderCount, 0);
+  const captionParts = [`${totalOrders} order(s) checked — `];
+  statusCounts.forEach((c, i) => {
+    if (i > 0) captionParts.push(", ");
+    captionParts.push(`${c.orderCount} `, statusChip(c.status), ` (${c.lineCount} line(s))`);
+  });
+  captionParts.push(".");
+  root.appendChild(h("p", { class: "caption" }, captionParts));
   root.appendChild(dispatchArea);
 
-  // Separate downloadable file per warehouse + status (Dispatched / Not
-  // Dispatched go in their own workbook, never mixed) + month — Dispatched
-  // rows split by their actual Shipped-date month, Not Dispatched rows by
-  // their resolved Refund-date month, mirroring Step 6's journal splitting.
+  // One combined workbook, one tab per warehouse + status — Dispatched/
+  // Partially Dispatched rows grouped by their actual Shipped-date month,
+  // Not Dispatched rows by their resolved Refund-date month (mirroring
+  // Step 6's journal splitting); a (warehouse, status) pair only gets a
+  // " - Mon" suffix on its tab name when it actually spans more than one
+  // month — otherwise the month is implied and left off. A status with no
+  // rows at all for a warehouse simply never gets a tab (nothing to skip).
   const monthKeyForDispatchRow = (row) => {
     const raw =
-      row.__dispatch_status === "Dispatched"
+      row.__dispatch_status !== "Not Dispatched"
         ? row.__shipped_date_raw
         : row.__refund_date_resolution && row.__refund_date_resolution.resolved
         ? row.__refund_date_resolution.date
         : null;
     if (raw == null) return "unknown";
     return taskC.monthKey(raw) || "unknown";
+  };
+  const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const shortMonthLabel = (mk) => {
+    if (mk === "unknown") return "Unknown";
+    const idx = parseInt(mk.split("-")[1], 10) - 1;
+    return MONTH_ABBR[idx] || mk;
   };
   const dispatchFileGroups = new Map(); // `${wh}|${status}|${monthKey}` -> { wh, status, monthKey, rows }
   for (const row of allOutRows) {
@@ -7780,43 +7805,49 @@ function renderTaskC() {
   }
   const sortedGroups = Array.from(dispatchFileGroups.values()).sort((a, b) => {
     if (a.wh !== b.wh) return a.wh < b.wh ? -1 : 1;
-    if (a.status !== b.status) return a.status === "Dispatched" ? -1 : 1;
+    if (a.status !== b.status) return statusRank(a.status) - statusRank(b.status);
     return a.monthKey < b.monthKey ? -1 : a.monthKey > b.monthKey ? 1 : 0;
   });
+  const monthsPerWhStatus = new Map(); // `${wh}|${status}` -> Set(monthKey)
+  for (const g of sortedGroups) {
+    const k = `${g.wh}|${g.status}`;
+    if (!monthsPerWhStatus.has(k)) monthsPerWhStatus.set(k, new Set());
+    monthsPerWhStatus.get(k).add(g.monthKey);
+  }
+  const sheetDict = {};
+  for (const group of sortedGroups) {
+    const needsMonth = monthsPerWhStatus.get(`${group.wh}|${group.status}`).size > 1;
+    const sheetName = needsMonth ? `${group.wh} (${group.status}) - ${shortMonthLabel(group.monthKey)}` : `${group.wh} (${group.status})`;
+    sheetDict[sheetName] = group.rows;
+  }
   root.appendChild(
     h("p", {
       class: "file-desc",
-      text: "One file per warehouse + status + month, one row per order line — this is the raw dispatch-check detail (which orders matched, tracking/shipped date found or not). Use it to hand off or archive; the overview below lets you preview any of these without downloading.",
+      text: "One combined file, one tab per warehouse + status (+ month, only where a warehouse/status has more than one) — the raw dispatch-check detail (which orders matched, tracking/shipped date found or not). Use it to hand off or archive; the overview below lets you preview any of these without downloading.",
     })
   );
-  for (const group of sortedGroups) {
-    const statusSlug = group.status.replace(/\s+/g, "");
-    const row = h("div", { class: "file-row" });
-    row.appendChild(statusChip(group.status));
-    const btn = h("button", { text: `Download ${group.wh} — ${group.monthKey} (${group.rows.length} rows) (.xlsx)` });
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      const original = btn.textContent;
-      btn.textContent = "Building file...";
-      try {
-        const buf = await io.toExcelBytes({ [group.status]: group.rows });
-        downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()}_${group.wh}_${statusSlug}_${group.monthKey}_Dispatch_Check.xlsx`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = original;
-      }
-    });
-    row.appendChild(btn);
-    dispatchArea.appendChild(row);
-  }
+  const dispatchBtn = h("button", { text: `Download Dispatch Check — ${sortedGroups.length} tab(s) (.xlsx)` });
+  dispatchBtn.addEventListener("click", async () => {
+    dispatchBtn.disabled = true;
+    const original = dispatchBtn.textContent;
+    dispatchBtn.textContent = "Building file...";
+    try {
+      const buf = await io.toExcelBytes(sheetDict);
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()}_Dispatch_Check.xlsx`);
+    } finally {
+      dispatchBtn.disabled = false;
+      dispatchBtn.textContent = original;
+    }
+  });
+  dispatchArea.appendChild(dispatchBtn);
+
   // A-Z by warehouse (e.g. USOPS-WH04 before USOPS-WH05), Dispatched before
-  // Not Dispatched within each warehouse.
+  // Partially Dispatched before Not Dispatched within each warehouse.
   const sortedSheetEntries = Object.entries(combinedPerSheet).sort(([nameA], [nameB]) => {
     const [whA, statusA] = nameA.split(" - ");
     const [whB, statusB] = nameB.split(" - ");
     if (whA !== whB) return whA < whB ? -1 : 1;
-    if (statusA !== statusB) return statusA === "Dispatched" ? -1 : 1;
-    return 0;
+    return statusRank(statusA) - statusRank(statusB);
   });
   for (const [name, rows] of sortedSheetEntries) {
     const [wh, status] = name.split(" - ");
