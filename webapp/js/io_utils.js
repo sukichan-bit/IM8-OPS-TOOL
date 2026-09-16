@@ -287,6 +287,53 @@ function unpivotSkuBlocks(rows) {
   return out;
 }
 
+// Some real exports declare a used-range (and therefore a materialized row
+// count via sheet_to_json) orders of magnitude beyond their actual data —
+// e.g. a sheet with 237 real rows reporting 1,048,362. Scanning cell
+// addresses directly (rather than building the full row-array via
+// sheet_to_json, which would materialize ~1M near-empty rows) finds the true
+// last populated cell in one column cheaply. colLetter: 1-based Excel column
+// letter (e.g. "B"). Returns the 0-indexed row of the last non-blank cell in
+// that column, or -1 if the column is entirely empty.
+function findLastPopulatedRowInColumn(workbook, sheetName, colLetter) {
+  const XLSXLib = getXlsxLib();
+  const ws = workbook.Sheets[sheetName];
+  if (!ws || !ws["!ref"]) return -1;
+  const range = XLSXLib.utils.decode_range(ws["!ref"]);
+  for (let r = range.e.r; r >= range.s.r; r--) {
+    const cell = ws[`${colLetter}${r + 1}`];
+    if (cell != null && cell.v != null && String(cell.v).trim() !== "") return r;
+  }
+  return -1;
+}
+
+// Raw preview bounded to an explicit 0-indexed row range (inclusive) —
+// avoids materializing a full sheet_to_json array when the sheet's declared
+// range wildly overstates the real data extent (see
+// findLastPopulatedRowInColumn above).
+function sheetToRawRowsInRange(workbook, sheetName, startRow, endRow) {
+  const XLSXLib = getXlsxLib();
+  const ws = workbook.Sheets[sheetName];
+  const rows = XLSXLib.utils.sheet_to_json(ws, {
+    header: 1,
+    raw: true,
+    defval: null,
+    range: { s: { r: startRow, c: 0 }, e: { r: endRow, c: 200 } },
+  });
+  return rows;
+}
+
+// Direct access to a single cell's formula text (no leading "=") and cached
+// value, bypassing sheet_to_json (which flattens formula cells down to their
+// value alone). colLetter: 1-based Excel column letter, rowNumber: 1-indexed
+// Excel row number. Returns null if the cell doesn't exist.
+function getCellInfo(workbook, sheetName, colLetter, rowNumber) {
+  const ws = workbook.Sheets[sheetName];
+  const cell = ws ? ws[`${colLetter}${rowNumber}`] : null;
+  if (!cell) return null;
+  return { value: cell.v == null ? null : cell.v, formula: cell.f || null };
+}
+
 function guessWarehouseFromFilename(filename, knownWarehouses) {
   const upper = String(filename).toUpperCase();
   const matches = knownWarehouses.filter((wh) => upper.includes(String(wh).toUpperCase()));
@@ -371,6 +418,9 @@ if (typeof window !== "undefined") {
     hasSkuBlocks,
     unpivotSkuBlocks,
     guessWarehouseFromFilename,
+    findLastPopulatedRowInColumn,
+    sheetToRawRowsInRange,
+    getCellInfo,
     toExcelBytes,
   };
 }
@@ -392,6 +442,9 @@ if (typeof module !== "undefined") {
     hasSkuBlocks,
     unpivotSkuBlocks,
     guessWarehouseFromFilename,
+    findLastPopulatedRowInColumn,
+    sheetToRawRowsInRange,
+    getCellInfo,
     toExcelBytes,
   };
 }

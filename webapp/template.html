@@ -210,6 +210,8 @@
   table.data-table tr.row-red td { background: rgba(255, 199, 206, 0.75); color: #9C0006; box-shadow: inset 3px 0 0 #e0455a; }
   table.data-table tr.row-green td { background: rgba(198, 239, 206, 0.75); color: #006100; box-shadow: inset 3px 0 0 #2fa84f; }
   table.data-table tr.row-amber td { background: rgba(255, 217, 102, 0.75); box-shadow: inset 3px 0 0 #e0a800; }
+  table.data-table tr.row-blue td { background: rgba(221, 235, 247, 0.75); color: #1f4e78; box-shadow: inset 3px 0 0 #5b9bd5; }
+  table.data-table tr.row-gray td { background: rgba(217, 217, 217, 0.6); color: #404040; box-shadow: inset 3px 0 0 #a6a6a6; }
 
   /* Status chips (Task C) — same palette as the row-green/row-red highlight
      colors above, so a "Dispatched"/"Not Dispatched" label reads consistently
@@ -395,6 +397,8 @@ table.data-table tr:nth-child(even) td { background: rgba(20, 28, 46, 0.03); }
 table.data-table tr.row-red td { background: rgba(179, 38, 30, 0.1); color: #8a1c16; box-shadow: inset 3px 0 0 var(--ops-flag); }
 table.data-table tr.row-green td { background: rgba(20, 83, 45, 0.08); color: #14532d; box-shadow: inset 3px 0 0 #14532d; }
 table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #6b4600; box-shadow: inset 3px 0 0 #b47800; }
+table.data-table tr.row-blue td { background: rgba(91, 155, 213, 0.12); color: #1f4e78; box-shadow: inset 3px 0 0 #5b9bd5; }
+table.data-table tr.row-gray td { background: rgba(120, 120, 120, 0.12); color: #404040; box-shadow: inset 3px 0 0 #a6a6a6; }
 
 .status-chip { border-radius: 0; padding: 2px 9px; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.02em; }
 .status-chip-dispatched { background: rgba(20, 83, 45, 0.12); color: #14532d; }
@@ -950,64 +954,139 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
     <section class="ops2-left">
       <div class="ops2-heading">
         <div class="ops2-eyebrow">Task D</div>
-        <h2>D365 Disposal Journal</h2>
-        <p class="task-lede">Turns a damage or defective report into a ready-to-import disposal journal.</p>
+        <h2>D365 Journal Generator</h2>
+        <p class="task-lede">Two journal generators sharing the same 22-column D365 import template.</p>
         <details class="task-detail ops2-how"><summary>How this works</summary>
-          <p>Generates a D365 disposal-journal import file from a damage/defective report: negative-only lines, batch numbers allocated from an on-hand snapshot (largest-first split, flagged UNALLOCATED if stock is insufficient), cost priced from an inventory aging report with a live Cost amount formula. Reconciliation-journal support (stocktake vs. system on-hand) is not yet implemented.</p>
+          <p><strong>Disposal journal:</strong> turns a damage/defective report into negative-only lines, batch numbers allocated from an on-hand snapshot (largest-first split, flagged UNALLOCATED if stock is insufficient), cost priced from an inventory aging report with a live Cost amount formula.</p>
+          <p><strong>Reconciliation journal:</strong> turns a month-end stocktake-vs-system reconciliation workbook into adjustment lines (positive or negative), batch-allocated from an on-hand export, with source-vs-journal totals validated before any file is produced. Never posts to D365 and never silently resolves ambiguity — anything uncertain is surfaced for confirmation or blocks the run outright.</p>
         </details>
-      </div>
-      <hr class="ops2-hr">
-      <div class="ops2-required">
-        <div class="ops2-required-head"><h6>Required files</h6><span class="ops2-count" data-required-count></span></div>
-        <div class="ops2-slot-row">
-          <div class="ops2-slot-main">
-            <div class="ops2-slot-label">Damage / defective report</div>
-            <div class="ops2-slot-desc">One row per SKU. Works with either a single Quantity column or the older one-column-per-date-range layout — auto-detected, with sample values shown so you can pick correctly if headers are unusual. Warehouse is read from the filename.</div>
-            <div id="task-d-report-info"></div>
-          </div>
-          <div class="ops2-slot-action">
-            <label class="ops2-filebtn" for="d-report-file">Choose file</label>
-            <input type="file" id="d-report-file" accept=".xlsx,.xls,.csv" class="ops2-file-hidden">
-            <button type="button" class="ops2-slot-clear" id="d-report-clear">Clear file</button>
-          </div>
+        <div class="ops2-seg" id="d-mode-seg">
+          <button type="button" data-mode="disposal" class="ops2-seg-active">Disposal journal</button>
+          <button type="button" data-mode="recon">Reconciliation journal</button>
         </div>
       </div>
-      <details class="ops2-optional">
-        <summary><span>Optional files (2)</span><span class="ops2-optional-count" data-optional-count></span></summary>
-        <div class="ops2-optional-body">
+      <hr class="ops2-hr">
+
+      <div id="d-mode-disposal-panel">
+        <div class="ops2-required">
+          <div class="ops2-required-head"><h6>Required files</h6><span class="ops2-count" data-required-count></span></div>
+          <div class="ops2-slot-row">
+            <div class="ops2-slot-main">
+              <div class="ops2-slot-label">Damage / defective report</div>
+              <div class="ops2-slot-desc">One row per SKU. Works with either a single Quantity column or the older one-column-per-date-range layout — auto-detected, with sample values shown so you can pick correctly if headers are unusual. Warehouse is read from the filename.</div>
+              <div id="task-d-report-info"></div>
+            </div>
+            <div class="ops2-slot-action">
+              <label class="ops2-filebtn" for="d-report-file">Choose file</label>
+              <input type="file" id="d-report-file" accept=".xlsx,.xls,.csv" class="ops2-file-hidden">
+              <button type="button" class="ops2-slot-clear" id="d-report-clear">Clear file</button>
+            </div>
+          </div>
+        </div>
+        <details class="ops2-optional">
+          <summary><span>Optional files (2)</span><span class="ops2-optional-count" data-optional-count></span></summary>
+          <div class="ops2-optional-body">
+            <div class="ops2-slot-row">
+              <div class="ops2-slot-main">
+                <div class="ops2-slot-label">D365 on-hand export</div>
+                <div class="ops2-slot-desc">For batch allocation — without it every line is flagged and Batch number is left blank</div>
+                <div id="task-d-onhand-info"></div>
+              </div>
+              <div class="ops2-slot-action">
+                <label class="ops2-filebtn" for="d-onhand-file">Choose file</label>
+                <input type="file" id="d-onhand-file" accept=".xlsx,.xls,.csv" class="ops2-file-hidden">
+                <button type="button" class="ops2-slot-clear" id="d-onhand-clear">Clear file</button>
+              </div>
+            </div>
+            <div class="ops2-slot-row">
+              <div class="ops2-slot-main">
+                <div class="ops2-slot-label">Inventory aging report</div>
+                <div class="ops2-slot-desc">Adds cost price and unit, matched by Item + Warehouse — without it, Cost price is left at 0 and flagged</div>
+                <div id="task-d-aging-info"></div>
+              </div>
+              <div class="ops2-slot-action">
+                <label class="ops2-filebtn" for="d-aging-file">Choose file</label>
+                <input type="file" id="d-aging-file" accept=".xlsx,.xls,.csv,.pdf" class="ops2-file-hidden">
+                <button type="button" class="ops2-slot-clear" id="d-aging-clear">Clear file</button>
+              </div>
+            </div>
+          </div>
+        </details>
+        <div class="ops2-runwrap">
+          <button type="button" class="run-btn" id="d-run-btn" disabled>Run Task D</button>
+          <div class="ops2-helper" data-helper></div>
+        </div>
+      </div>
+
+      <div id="d-mode-recon-panel" hidden>
+        <div class="ops2-required">
+          <div class="ops2-required-head"><h6>Required files</h6><span class="ops2-count" data-recon-required-count></span></div>
+          <div class="ops2-slot-row">
+            <div class="ops2-slot-main">
+              <div class="ops2-slot-label">Reconciliation workbook</div>
+              <div class="ops2-slot-desc">Multi-tab .xlsx, one tab per warehouse (header row 3, data from row 4). The quantity/amount-variant columns are located per run, never assumed.</div>
+              <div id="task-d-recon-workbook-info"></div>
+            </div>
+            <div class="ops2-slot-action">
+              <label class="ops2-filebtn" for="d-recon-workbook-file">Choose file</label>
+              <input type="file" id="d-recon-workbook-file" accept=".xlsx,.xls" class="ops2-file-hidden">
+              <button type="button" class="ops2-slot-clear" id="d-recon-workbook-clear">Clear file</button>
+            </div>
+          </div>
           <div class="ops2-slot-row">
             <div class="ops2-slot-main">
               <div class="ops2-slot-label">D365 on-hand export</div>
-              <div class="ops2-slot-desc">For batch allocation — without it every line is flagged and Batch number is left blank</div>
-              <div id="task-d-onhand-info"></div>
+              <div class="ops2-slot-desc">Drives batch allocation and the NOT_IN_D365 / not-set-up-at-this-warehouse checks. Filename should look like YYYYMMDD_ENTITY_on-hand_report__as_of_HHMM_.xlsx so the snapshot timestamp can be parsed.</div>
+              <div id="task-d-recon-onhand-info"></div>
             </div>
             <div class="ops2-slot-action">
-              <label class="ops2-filebtn" for="d-onhand-file">Choose file</label>
-              <input type="file" id="d-onhand-file" accept=".xlsx,.xls,.csv" class="ops2-file-hidden">
-              <button type="button" class="ops2-slot-clear" id="d-onhand-clear">Clear file</button>
-            </div>
-          </div>
-          <div class="ops2-slot-row">
-            <div class="ops2-slot-main">
-              <div class="ops2-slot-label">Inventory aging report</div>
-              <div class="ops2-slot-desc">Adds cost price and unit, matched by Item + Warehouse — without it, Cost price is left at 0 and flagged</div>
-              <div id="task-d-aging-info"></div>
-            </div>
-            <div class="ops2-slot-action">
-              <label class="ops2-filebtn" for="d-aging-file">Choose file</label>
-              <input type="file" id="d-aging-file" accept=".xlsx,.xls,.csv,.pdf" class="ops2-file-hidden">
-              <button type="button" class="ops2-slot-clear" id="d-aging-clear">Clear file</button>
+              <label class="ops2-filebtn" for="d-recon-onhand-file">Choose file</label>
+              <input type="file" id="d-recon-onhand-file" accept=".xlsx,.xls,.csv" class="ops2-file-hidden">
+              <button type="button" class="ops2-slot-clear" id="d-recon-onhand-clear">Clear file</button>
             </div>
           </div>
         </div>
-      </details>
-      <div class="ops2-runwrap">
-        <button type="button" class="run-btn" id="d-run-btn" disabled>Run Task D</button>
-        <div class="ops2-helper" data-helper></div>
+        <details class="ops2-optional">
+          <summary><span>Optional files (1)</span><span class="ops2-optional-count" data-recon-optional-count></span></summary>
+          <div class="ops2-optional-body">
+            <div class="ops2-slot-row">
+              <div class="ops2-slot-main">
+                <div class="ops2-slot-label">Prior on-hand export</div>
+                <div class="ops2-slot-desc">Enables snapshot-drift checks: a batch that vanished, or dropped materially, between two exports.</div>
+                <div id="task-d-recon-prior-onhand-info"></div>
+              </div>
+              <div class="ops2-slot-action">
+                <label class="ops2-filebtn" for="d-recon-prior-onhand-file">Choose file</label>
+                <input type="file" id="d-recon-prior-onhand-file" accept=".xlsx,.xls,.csv" class="ops2-file-hidden">
+                <button type="button" class="ops2-slot-clear" id="d-recon-prior-onhand-clear">Clear file</button>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <div class="col-grid" id="d-recon-params" style="margin-top:12px">
+          <div class="col-field">
+            <label>Entity</label>
+            <select id="d-recon-entity">
+              <option value="H007">H007 (EU)</option>
+              <option value="U001">U001 (US)</option>
+            </select>
+          </div>
+          <div class="col-field">
+            <label>Journal date</label>
+            <input type="date" id="d-recon-journal-date">
+          </div>
+        </div>
+        <label class="checkbox-inline">
+          <input type="checkbox" id="d-recon-non-interactive">
+          Strict mode — treat every confirmation as a blocker (for unattended/scheduled runs)
+        </label>
+
+        <div id="d-recon-warehouses"></div>
       </div>
     </section>
     <section class="ops2-right">
-      <div class="ops2-empty">
+      <div class="ops2-empty" id="d-mode-disposal-empty">
         <h6>Output</h6>
         <div class="ops2-empty-title">Add the required files, then run.</div>
         <div class="ops2-preview">
@@ -1017,6 +1096,16 @@ table.data-table tr.row-amber td { background: rgba(180, 120, 0, 0.12); color: #
         </div>
       </div>
       <div id="task-d-results"></div>
+      <div class="ops2-empty" id="d-mode-recon-empty" hidden>
+        <h6>Output</h6>
+        <div class="ops2-empty-title">Add the required files above, then a result panel appears per warehouse.</div>
+        <div class="ops2-preview">
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">One adjustment-journal .xlsx per warehouse</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">Review queue: shortfalls, splits, not-in-D365, confirmations</span></div>
+          <div class="ops2-preview-row"><span class="arrow">→</span><span class="txt">A BLOCK finding stops the file from being produced at all</span></div>
+        </div>
+      </div>
+      <div id="task-d-recon-results"></div>
     </section>
   </div>
 </div>

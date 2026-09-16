@@ -2076,6 +2076,304 @@ function renderTaskD() {
   recompute();
 }
 
+// ---------------- Task D — reconciliation-journal mode ----------------
+// Shares the tab-d panel/tab with the disposal journal above (both are
+// "Task D — D365 Journal Generator", per app.js/template.html) via a mode
+// toggle. Per-warehouse controls+results are combined into one card in the
+// left column rather than following the usual single left/right split,
+// since (unlike every other task here) this one produces a separate result
+// per warehouse from a single set of uploaded files.
+
+const taskDReconState = {
+  mode: "disposal",
+  workbook: null, // { wb, sheets, fileName }
+  onhand: null, onHandIndex: null, snapshotTimestamp: null,
+  priorOnhand: null, priorOnHandIndex: null,
+  entity: "H007",
+  journalDate: "",
+  nonInteractive: false,
+  profiles: null, // session-local mutable clone of taskD's standing profile — seeded lazily
+  warehouseUI: {}, // warehouse code -> { enabled, tabName, qtyColumnOverride, aliasText, exclusionText }
+};
+
+function reconProfiles() {
+  if (!taskDReconState.profiles) taskDReconState.profiles = taskD.reconCloneEntities();
+  return taskDReconState.profiles;
+}
+
+function reconWarehouseUiState(entity, wh) {
+  if (!taskDReconState.warehouseUI[wh]) {
+    const profile = reconProfiles()[entity][wh];
+    taskDReconState.warehouseUI[wh] = {
+      enabled: true,
+      tabName: profile.tabName,
+      qtyColumnOverride: "",
+      aliasText: Object.entries(profile.aliases || {}).map(([k, v]) => `${k}=${v}`).join("\n"),
+      exclusionText: (profile.exclusions || []).join("\n"),
+    };
+  }
+  return taskDReconState.warehouseUI[wh];
+}
+
+function parseReconAliasText(text) {
+  const map = {};
+  String(text || "").split(/\r?\n/).forEach((line) => {
+    const m = /^\s*([^=]+?)\s*=\s*(.+?)\s*$/.exec(line);
+    if (m) map[m[1].trim()] = m[2].trim();
+  });
+  return map;
+}
+function parseReconExclusionText(text) {
+  return String(text || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+}
+
+function setTaskDMode(mode) {
+  taskDReconState.mode = mode;
+  document.getElementById("d-mode-disposal-panel").hidden = mode !== "disposal";
+  document.getElementById("d-mode-recon-panel").hidden = mode !== "recon";
+  document.getElementById("task-d-results").style.display = mode === "disposal" ? "" : "none";
+  document.getElementById("task-d-recon-results").style.display = mode === "recon" ? "" : "none";
+  document.getElementById("d-mode-disposal-empty").style.display = mode === "disposal" && !document.getElementById("task-d-results").children.length ? "" : "none";
+  document.getElementById("d-mode-recon-empty").style.display = mode === "recon" ? "" : "none";
+  document.querySelectorAll("#d-mode-seg button").forEach((b) => b.classList.toggle("ops2-seg-active", b.dataset.mode === mode));
+  if (mode === "recon") renderTaskDRecon();
+}
+
+async function handleTaskDReconWorkbook(file) {
+  const container = document.getElementById("task-d-recon-workbook-info");
+  container.innerHTML = "";
+  if (!file) {
+    taskDReconState.workbook = null;
+    renderTaskDRecon();
+    return;
+  }
+  const buf = await file.arrayBuffer();
+  const wb = io.loadWorkbook(buf, file.name);
+  const sheets = io.listSheets(wb);
+  taskDReconState.workbook = { wb, sheets, fileName: file.name };
+  container.appendChild(h("p", { class: "caption", text: `Loaded '${file.name}' — ${sheets.length} tab(s): ${sheets.join(", ")}` }));
+  renderTaskDRecon();
+}
+
+// Note: onHandIndex is deliberately NOT cached on state — reconAllocateBatches
+// mutates its batch-quantity arrays in place as it consumes stock, so a
+// cached index would get progressively (and silently) depleted across
+// repeated renders/recomputes. renderTaskDRecon() rebuilds a fresh index
+// from the raw rows on every single pass instead (mirrors the disposal-
+// journal recompute() above, which does the same for the same reason).
+async function handleTaskDReconOnhand(file) {
+  const container = document.getElementById("task-d-recon-onhand-info");
+  container.innerHTML = "";
+  if (!file) {
+    taskDReconState.onhand = null;
+    taskDReconState.snapshotTimestamp = null;
+    renderTaskDRecon();
+    return;
+  }
+  const state = await setupFileUI(container, file, TASK_C_ONHAND_CANDIDATES, null);
+  state.onChange = () => renderTaskDRecon();
+  taskDReconState.onhand = state;
+
+  const parsed = taskD.reconParseOnHandFilename(file.name);
+  taskDReconState.snapshotTimestamp = parsed ? parsed.timestamp : null;
+  container.appendChild(h("p", { class: parsed ? "info" : "warning", text: parsed ? `Snapshot timestamp parsed from filename: ${parsed.timestamp.toISOString().slice(0, 16).replace("T", " ")} UTC.` : "Could not parse a snapshot timestamp from this filename (expected YYYYMMDD_ENTITY_on-hand_report__as_of_HHMM_.xlsx) — the snapshot-age check will be skipped." }));
+  renderTaskDRecon();
+}
+
+async function handleTaskDReconPriorOnhand(file) {
+  const container = document.getElementById("task-d-recon-prior-onhand-info");
+  container.innerHTML = "";
+  if (!file) {
+    taskDReconState.priorOnhand = null;
+    renderTaskDRecon();
+    return;
+  }
+  const state = await setupFileUI(container, file, TASK_C_ONHAND_CANDIDATES, null);
+  state.onChange = () => renderTaskDRecon();
+  taskDReconState.priorOnhand = state;
+  renderTaskDRecon();
+}
+
+function reconCurrentOnHandIndex() {
+  const state = taskDReconState.onhand;
+  return state && !state.getMissing().length ? taskD.reconBuildOnHandIndex(state.rows, state.colMap) : null;
+}
+function reconCurrentPriorOnHandIndex() {
+  const state = taskDReconState.priorOnhand;
+  return state && !state.getMissing().length ? taskD.reconBuildOnHandIndex(state.rows, state.colMap) : null;
+}
+
+function reconIssueBox(issues, cssClass, label) {
+  if (!issues.length) return null;
+  const box = h("div", { class: cssClass, style: "margin-top:8px" });
+  box.appendChild(h("strong", { text: `${label} (${issues.length})` }));
+  const ul = h("ul", { style: "margin:6px 0 0; padding-left:18px" });
+  issues.forEach((i) => ul.appendChild(h("li", { text: i.message })));
+  box.appendChild(ul);
+  return box;
+}
+
+function reconRowClass(result, idx) {
+  const c = result.rowColors[idx];
+  return c === "red" ? "row-red" : c === "yellow" ? "row-amber" : c === "blue" ? "row-blue" : c === "gray" ? "row-gray" : null;
+}
+
+function renderReconResult(entity, wh, result, container) {
+  container.innerHTML = "";
+  const summary = h("p", { class: "info" });
+  summary.textContent = `${result.diagnostics.sourceRowCount || 0} source data row(s) -> ${result.table.length} journal line(s). ${result.ok ? "No BLOCK findings — ready to download." : "BLOCKED — resolve the issue(s) below before a file can be produced."}`;
+  container.appendChild(summary);
+
+  const blockBox = reconIssueBox(result.issues.blocks, "error", "BLOCK");
+  if (blockBox) container.appendChild(blockBox);
+  const confirmBox = reconIssueBox(result.issues.confirms, "warning", "CONFIRM");
+  if (confirmBox) container.appendChild(confirmBox);
+  const noteBox = reconIssueBox(result.issues.notes, "info", "NOTE");
+  if (noteBox) container.appendChild(noteBox);
+
+  if (Object.keys(result.diagnostics).length) {
+    container.appendChild(h("details", {}, [h("summary", { text: "Diagnostics" }), h("pre", { class: "diagnostics", text: JSON.stringify(result.diagnostics, null, 2) })]));
+  }
+
+  if (!result.table.length) return;
+
+  renderCollapsibleTable(container, `${entity} ${wh} journal preview`, result.table, 200, (row, idx) => reconRowClass(result, idx));
+
+  const btnRow = h("div", { style: "margin-top:8px" });
+  const dlLabel = `Download ${wh} adjustment journal (.xlsx)`;
+  const dlBtn = h("button", { text: dlLabel });
+  dlBtn.disabled = !result.ok;
+  dlBtn.addEventListener("click", async () => {
+    dlBtn.disabled = true;
+    dlBtn.textContent = "Building file...";
+    try {
+      const dateObj = taskD.reconParseDateOnly(taskDReconState.journalDate);
+      const buf = await taskD.renderReconciliationWorkbook(result.table, result.rowColors, wh);
+      const fname = `${entity}_${wh}_Adjustment_Journal_${taskD.reconMonYear(dateObj)}.xlsx`;
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), fname);
+    } finally {
+      dlBtn.disabled = !result.ok;
+      dlBtn.textContent = dlLabel;
+    }
+  });
+  btnRow.appendChild(dlBtn);
+  container.appendChild(btnRow);
+}
+
+function renderTaskDReconWarehouseCard(entity, wh, container, onHandIndex, priorOnHandIndex) {
+  const wui = reconWarehouseUiState(entity, wh);
+
+  const card = h("div", { class: "ops2-optional", style: "margin-top:12px" });
+  const head = h("div", { class: "ops2-required-head" });
+  const enableCb = h("input", { type: "checkbox" });
+  enableCb.checked = wui.enabled;
+  enableCb.addEventListener("change", () => { wui.enabled = enableCb.checked; renderTaskDRecon(); });
+  head.appendChild(h("label", { class: "checkbox-inline" }, [enableCb, ` ${wh}`]));
+  card.appendChild(head);
+
+  const body = h("div", { class: "ops2-optional-body", style: "display:block" });
+  const grid = h("div", { class: "col-grid" });
+
+  const tabWrap = h("div", { class: "col-field" });
+  tabWrap.appendChild(h("label", { text: "Sheet tab" }));
+  const tabSelect = h("select", {});
+  const sheets = (taskDReconState.workbook && taskDReconState.workbook.sheets) || [];
+  if (!sheets.length) {
+    tabSelect.appendChild(h("option", { value: "" }, ["(upload the reconciliation workbook first)"]));
+  } else {
+    sheets.forEach((s) => tabSelect.appendChild(h("option", { value: s }, [s])));
+    if (!sheets.includes(wui.tabName)) wui.tabName = sheets[0];
+    tabSelect.value = wui.tabName;
+  }
+  tabSelect.addEventListener("change", () => { wui.tabName = tabSelect.value; renderTaskDRecon(); });
+  tabWrap.appendChild(tabSelect);
+  grid.appendChild(tabWrap);
+
+  const qtyWrap = h("div", { class: "col-field" });
+  qtyWrap.appendChild(h("label", { text: "Qty column (blank = auto-detect by header)" }));
+  const qtyInput = h("input", { type: "text", placeholder: "e.g. T" });
+  qtyInput.value = wui.qtyColumnOverride;
+  qtyInput.addEventListener("change", () => { wui.qtyColumnOverride = qtyInput.value.trim(); renderTaskDRecon(); });
+  qtyWrap.appendChild(qtyInput);
+  grid.appendChild(qtyWrap);
+  body.appendChild(grid);
+
+  const aliasWrap = h("div", { class: "col-field" });
+  aliasWrap.appendChild(h("label", { text: "Aliases this run (one per line: SOURCE-SKU=D365-SKU)" }));
+  const aliasArea = h("textarea", { rows: "3" });
+  aliasArea.value = wui.aliasText;
+  aliasArea.addEventListener("change", () => { wui.aliasText = aliasArea.value; renderTaskDRecon(); });
+  aliasWrap.appendChild(aliasArea);
+  body.appendChild(aliasWrap);
+
+  const exclWrap = h("div", { class: "col-field" });
+  exclWrap.appendChild(h("label", { text: "Exclusions this run (one per line: item number or product name)" }));
+  const exclArea = h("textarea", { rows: "3" });
+  exclArea.value = wui.exclusionText;
+  exclArea.addEventListener("change", () => { wui.exclusionText = exclArea.value; renderTaskDRecon(); });
+  exclWrap.appendChild(exclArea);
+  body.appendChild(exclWrap);
+
+  const resultBox = h("div", { class: "recon-warehouse-result", style: "margin-top:10px" });
+  body.appendChild(resultBox);
+  card.appendChild(body);
+  container.appendChild(card);
+
+  if (!wui.enabled) {
+    resultBox.appendChild(h("p", { class: "muted", text: "Warehouse disabled for this run." }));
+    return;
+  }
+  if (!taskDReconState.workbook) {
+    resultBox.appendChild(h("p", { class: "warning", text: "Upload the reconciliation workbook above." }));
+    return;
+  }
+  if (!onHandIndex) {
+    resultBox.appendChild(h("p", { class: "warning", text: "Upload a valid D365 on-hand export above (check its column mapping if it's flagged)." }));
+    return;
+  }
+  if (!taskDReconState.journalDate) {
+    resultBox.appendChild(h("p", { class: "warning", text: "Pick a journal date above." }));
+    return;
+  }
+  if (!wui.tabName) {
+    resultBox.appendChild(h("p", { class: "warning", text: "Pick this warehouse's sheet tab above." }));
+    return;
+  }
+
+  const result = taskD.reconRunForWarehouse({
+    workbook: taskDReconState.workbook.wb, sheetName: wui.tabName,
+    entity, warehouse: wh,
+    qtyColumnOverride: wui.qtyColumnOverride || null,
+    journalDate: taskD.reconParseDateOnly(taskDReconState.journalDate),
+    onHandIndex,
+    priorOnHandIndex,
+    aliasMap: parseReconAliasText(wui.aliasText),
+    exclusionTerms: parseReconExclusionText(wui.exclusionText),
+    nonInteractive: taskDReconState.nonInteractive,
+    snapshotTimestamp: taskDReconState.snapshotTimestamp,
+  });
+  renderReconResult(entity, wh, result, resultBox);
+}
+
+function renderTaskDRecon() {
+  if (taskDReconState.mode !== "recon") return;
+  const container = document.getElementById("d-recon-warehouses");
+  container.innerHTML = "";
+  const entity = taskDReconState.entity;
+  const warehouses = Object.keys(reconProfiles()[entity] || {});
+  // Built fresh for this render pass — see the comment on
+  // handleTaskDReconOnhand above for why these must never be cached.
+  const onHandIndex = reconCurrentOnHandIndex();
+  const priorOnHandIndex = reconCurrentPriorOnHandIndex();
+  warehouses.forEach((wh) => renderTaskDReconWarehouseCard(entity, wh, container, onHandIndex, priorOnHandIndex));
+
+  const anyFileMissing = !taskDReconState.workbook || !onHandIndex;
+  const emptyEl = document.getElementById("d-mode-recon-empty");
+  emptyEl.querySelector(".ops2-empty-title").textContent = anyFileMissing
+    ? "Add the required files above, then a result panel appears per warehouse on the left."
+    : "Per-warehouse results are shown on the left, next to each warehouse's controls.";
+}
+
 // ---------------- Task E ----------------
 
 // Facts explicitly documented in TikTok_to_D365_SO_Workflow.md. Everything
@@ -3602,6 +3900,19 @@ function init() {
   document.getElementById("d-report-clear").addEventListener("click", () => { document.getElementById("d-report-file").value = ""; handleTaskDReport(null); });
   document.getElementById("d-onhand-clear").addEventListener("click", () => { document.getElementById("d-onhand-file").value = ""; handleTaskDOnhand(null); });
   document.getElementById("d-aging-clear").addEventListener("click", () => { document.getElementById("d-aging-file").value = ""; handleTaskDAging(null); });
+
+  document.querySelectorAll("#d-mode-seg button").forEach((btn) => {
+    btn.addEventListener("click", () => setTaskDMode(btn.dataset.mode));
+  });
+  onFileChange("d-recon-workbook-file", "Loading reconciliation workbook...", (e) => handleTaskDReconWorkbook(e.target.files[0]));
+  onFileChange("d-recon-onhand-file", "Loading on-hand inventory export...", (e) => handleTaskDReconOnhand(e.target.files[0]));
+  onFileChange("d-recon-prior-onhand-file", "Loading prior on-hand inventory export...", (e) => handleTaskDReconPriorOnhand(e.target.files[0]));
+  document.getElementById("d-recon-workbook-clear").addEventListener("click", () => { document.getElementById("d-recon-workbook-file").value = ""; handleTaskDReconWorkbook(null); });
+  document.getElementById("d-recon-onhand-clear").addEventListener("click", () => { document.getElementById("d-recon-onhand-file").value = ""; handleTaskDReconOnhand(null); });
+  document.getElementById("d-recon-prior-onhand-clear").addEventListener("click", () => { document.getElementById("d-recon-prior-onhand-file").value = ""; handleTaskDReconPriorOnhand(null); });
+  document.getElementById("d-recon-entity").addEventListener("change", (e) => { taskDReconState.entity = e.target.value; renderTaskDRecon(); });
+  document.getElementById("d-recon-journal-date").addEventListener("change", (e) => { taskDReconState.journalDate = e.target.value; renderTaskDRecon(); });
+  document.getElementById("d-recon-non-interactive").addEventListener("change", (e) => { taskDReconState.nonInteractive = e.target.checked; renderTaskDRecon(); });
 
   onFileChange("e-tiktok-file", "Loading TikTok transactions file...", (e) => handleTaskETikTokFile(e.target.files[0]));
   document.getElementById("e-tiktok-clear").addEventListener("click", () => { document.getElementById("e-tiktok-file").value = ""; handleTaskETikTokFile(null); });
