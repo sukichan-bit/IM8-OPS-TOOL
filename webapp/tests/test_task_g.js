@@ -819,6 +819,57 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   }
 }
 
+// ---- GPS: DDP/DDU country-name typo fix + USPS auto-zone (origin 085) ----
+// The source rate sheet's own "Destinations" header row misspelled two
+// countries ("Noway", "Saudi Arabic") — since a card's zones/
+// countryZoneMap are built directly from those header names, the typo
+// silently broke auto-detection for a user typing the correct spelling.
+{
+  const ddp = taskG.gpsDdpCard();
+  assert(ddp.zones.includes("Norway") && !ddp.zones.includes("Noway"), `DDP zones should have "Norway", not "Noway", got ${JSON.stringify(ddp.zones)}`);
+  assert(ddp.zones.includes("Saudi Arabia") && !ddp.zones.includes("Saudi Arabic"), `DDP zones should have "Saudi Arabia", not "Saudi Arabic", got ${JSON.stringify(ddp.zones)}`);
+  const norwayResult = taskG.resolveZone(ddp, { country: "Norway" });
+  assert(!norwayResult.error && norwayResult.zone === "Norway" && norwayResult.autoDetected === true, `resolveZone("Norway") on the real DDP card, got ${JSON.stringify(norwayResult)}`);
+  const saudiResult = taskG.resolveZone(ddp, { country: "saudi arabia" }); // case-insensitive
+  assert(!saudiResult.error && saudiResult.zone === "Saudi Arabia" && saudiResult.autoDetected === true, `resolveZone("saudi arabia") on the real DDP card, got ${JSON.stringify(saudiResult)}`);
+}
+
+// GPS's own USPS-branded domestic cards (Ground Advantage, Priority Mail)
+// now auto-detect zone by ZIP the same way Stord's cards do, using a real
+// USPS zone chart fetched for GPS's own origin ZIP3 "085" (Jackson
+// Township, NJ). UPS Ground / FedEx Ground / FedEx Ground Economy
+// deliberately stay zoneSource: "manual" — those carriers publish their
+// own zone-by-ZIP3 charts, which aren't guaranteed to match USPS's chart
+// zip3-for-zip3, and no such chart has been fetched/verified for them.
+{
+  const ga = taskG.gpsUspsGaCard();
+  const pm = taskG.gpsUspsPmCard();
+  assert(ga.zoneSource === "usps", `GPS USPS Ground Advantage should auto-detect zone, got zoneSource=${ga.zoneSource}`);
+  assert(pm.zoneSource === "usps", `GPS USPS Priority Mail should auto-detect zone, got zoneSource=${pm.zoneSource}`);
+  for (const manualCard of [taskG.gpsUpsGroundCard(), taskG.gpsFedexGroundCard(), taskG.gpsFedexGroundEconomyCard()]) {
+    assert(manualCard.zoneSource === "manual", `${manualCard.name} should stay manual (no verified carrier-specific zone chart), got ${manualCard.zoneSource}`);
+  }
+
+  const wh = taskG.getWarehouse("US_GPS");
+  assert(wh.uspsOriginZip3 === "085", `US_GPS warehouse should have uspsOriginZip3 "085", got ${wh.uspsOriginZip3}`);
+
+  // Spot-checked against postcalc.usps.com/domesticzonechart for origin 085.
+  const laResult = taskG.resolveZone(ga, { zip: "90001" }); // Los Angeles
+  assert(!laResult.error && laResult.zone === "8" && laResult.autoDetected === true, `resolveZone by ZIP (LA) on the real GPS USPS-GA card, got ${JSON.stringify(laResult)}`);
+  const newarkResult = taskG.resolveZone(ga, { zip: "07102" }); // Newark, NJ — near the origin
+  assert(!newarkResult.error && newarkResult.zone === "1" && newarkResult.autoDetected === true, `resolveZone by ZIP (Newark) on the real GPS USPS-GA card, got ${JSON.stringify(newarkResult)}`);
+
+  // Hawaii/Alaska/PR/APO ZIPs still safely refuse rather than guess, since
+  // these GPS cards (unlike some Stord cards) don't carry a named zone
+  // for them at all.
+  const hiResult = taskG.resolveZone(ga, { zip: "96814" }); // Honolulu
+  assert(!!hiResult.error, `resolveZone by ZIP (Honolulu) should refuse rather than guess, got ${JSON.stringify(hiResult)}`);
+
+  // Full end-to-end quote, no manual zone entry required.
+  const quote = taskG.quoteFreight({ card: ga, totalWeightKg: 2, parcelCount: 1, dims: null, dest: { zip: "90001" } });
+  assert(!quote.error && !quote.quoteRequired && quote.zoneAutoDetected === true && quote.zone === "8", `end-to-end GPS USPS-GA quote by ZIP alone, got ${JSON.stringify(quote)}`);
+}
+
 if (!ok) {
   console.error("\nTASK G TEST FAILED");
   process.exit(1);
