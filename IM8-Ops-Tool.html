@@ -6466,12 +6466,23 @@ function gpsUspsGaCard() {
   // Real USPS zone chart lookup by destination ZIP, origin ZIP3 "085" (see
   // resolveZone() / USPS_ZONE_CHARTS above) — same auto-detect as Stord.
   card.zoneSource = "usps";
+  // The source rate sheet's own priced bracket table only goes up to
+  // 20lb, but the card's own notes state a real USPS Ground Advantage
+  // per-package max of 70lb — so a heavier shipment isn't actually over
+  // the carrier's physical limit, just over this sheet's priced ladder.
+  // Split into full-20lb consignments (capped at the true 70lb physical
+  // max) rather than refusing outright; the result is flagged as needing
+  // packing confirmation, since it implies multiple physical parcels.
+  card.splitAllowed = true;
+  card.maxPhysicalWeight = 70;
   return card;
 }
 function gpsUspsPmCard() {
   const card = emptyManualCard("US_GPS", "GPS USPS Priority Mail", "lb", "in");
   Object.assign(card, GPS_USPS_PM_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // see gpsUspsGaCard() above
+  card.splitAllowed = true; // see gpsUspsGaCard() above — same 20lb-ladder-vs-70lb-physical-max gap
+  card.maxPhysicalWeight = 70;
   return card;
 }
 // UPS Ground / FedEx Ground / FedEx Ground Economy are NOT set to

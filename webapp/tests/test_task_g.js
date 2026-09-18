@@ -868,6 +868,22 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   // Full end-to-end quote, no manual zone entry required.
   const quote = taskG.quoteFreight({ card: ga, totalWeightKg: 2, parcelCount: 1, dims: null, dest: { zip: "90001" } });
   assert(!quote.error && !quote.quoteRequired && quote.zoneAutoDetected === true && quote.zone === "8", `end-to-end GPS USPS-GA quote by ZIP alone, got ${JSON.stringify(quote)}`);
+
+  // Splitting: the source sheet's priced bracket ladder tops out at
+  // 20lb, but the card's own notes state a real 70lb physical max for
+  // both GA and PM — so a heavier shipment should split into
+  // consignments instead of refusing outright (reported: a 55.36lb
+  // shipment to LA/zone 8 previously errored "exceeds this card's
+  // maximum of 20 lb... splitting isn't enabled").
+  assert(ga.splitAllowed === true && ga.maxPhysicalWeight === 70, `GPS USPS-GA should allow splitting up to its real 70lb physical max, got splitAllowed=${ga.splitAllowed} maxPhysicalWeight=${ga.maxPhysicalWeight}`);
+  assert(pm.splitAllowed === true && pm.maxPhysicalWeight === 70, `GPS USPS-PM should allow splitting up to its real 70lb physical max, got splitAllowed=${pm.splitAllowed} maxPhysicalWeight=${pm.maxPhysicalWeight}`);
+  const heavyKg = taskG.convertWeight(55.36, "lb", "kg");
+  const heavyQuote = taskG.quoteFreight({ card: ga, totalWeightKg: heavyKg, parcelCount: 1, dims: null, dest: { zip: "90001" } });
+  assert(!heavyQuote.error && !heavyQuote.quoteRequired, `55.36lb GPS USPS-GA to zone 8 should split rather than error, got ${JSON.stringify(heavyQuote)}`);
+  assert(Array.isArray(heavyQuote.split) && heavyQuote.split.length === 3, `55.36lb over a 20lb ladder should split into 3 consignments (20+20+15.36), got ${JSON.stringify(heavyQuote.split)}`);
+  assert(close(heavyQuote.split[0].weight, 20) && close(heavyQuote.split[1].weight, 20) && close(heavyQuote.split[2].weight, 15.36, 1e-6), `split consignment weights, got ${JSON.stringify(heavyQuote.split.map((s) => s.weight))}`);
+  assert(heavyQuote.packingConfirmationRequired === true, "a split quote should be flagged as needing packing confirmation");
+  assert(close(heavyQuote.totalCost, 82.81, 0.01), `55.36lb GPS USPS-GA to zone 8 total, got ${heavyQuote.totalCost}`);
 }
 
 if (!ok) {
