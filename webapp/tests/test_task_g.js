@@ -129,8 +129,9 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
     `flatSurcharge should add per parcel, got ${JSON.stringify(q)}`);
 }
 
-// ---- Real UK (OPS-WH02) rate cards seeded from the Royal Mail / DPD rate
-// card (RS UK eFulfillment Rate_VIP4.1_IM8_2026.4.1.xlsx, 2026-09-11) ----
+// ---- Real UK (OPS-WH02) rate cards seeded from the Royal Mail / DPD /
+// Evri / Yodel rate card (RS UK eFulfillment Rate_VIP4.1_IM8_2026.9.21.xlsx,
+// 2026-09-22 — supersedes the prior "...2026.4.1.xlsx" version) ----
 {
   const rm = taskG.ukRoyalMailCard();
   // 1.5kg to a mainland (Area 1) address: base 2.30 + flat surcharge 0.17.
@@ -141,17 +142,51 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qRemote.error && close(qRemote.perParcelCost, 7.27), `Royal Mail Area 3 2.01-5kg, got ${JSON.stringify(qRemote)}`);
 
   const dpdUk = taskG.ukDpdUkCard();
-  // Northern Ireland (Zone 4) price already includes the NI Clearance Surcharge.
+  // Northern Ireland (Zone 4): base 13.00 + NI Clearance Surcharge 0.60
+  // (baked into the bracket price) + the new DPD Temporary Fuel
+  // Surcharge 0.15 (flatSurcharge) = 13.75.
   const qNi = taskG.quoteFreight({ card: dpdUk, totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone 4" } });
-  assert(!qNi.error && close(qNi.perParcelCost, 13.6), `DPD UK Zone 4 (Northern Ireland), got ${JSON.stringify(qNi)}`);
+  assert(!qNi.error && close(qNi.perParcelCost, 13.75), `DPD UK Zone 4 (Northern Ireland), got ${JSON.stringify(qNi)}`);
 
-  const dpdIntl = taskG.ukDpdNonUkCard();
+  const dpdEmna = taskG.ukDpdEmnaCard();
   // Country -> zone resolution should work directly off the country name (identity map).
-  const qNorway = taskG.quoteFreight({ card: dpdIntl, totalWeightKg: 1, parcelCount: 1, dest: { country: "Norway" } });
-  assert(!qNorway.error && close(qNorway.perParcelCost, 29.5), `DPD Non-UK Norway 0.51-1kg, got ${JSON.stringify(qNorway)}`);
+  const qUae = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 2, parcelCount: 1, dest: { country: "UAE" } });
+  assert(!qUae.error && close(qUae.perParcelCost, 30.6), `DPD-EMNA UAE 0-2kg, got ${JSON.stringify(qUae)}`);
+  const qIsrael = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 10, parcelCount: 1, dest: { country: "israel" } }); // case-insensitive
+  assert(!qIsrael.error && close(qIsrael.perParcelCost, 174.3), `DPD-EMNA Israel 5.01-10kg, got ${JSON.stringify(qIsrael)}`);
+  // Norway was dropped from this service in the 2026-09-21 rate sheet — should refuse, not guess.
+  const qNorway = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 1, parcelCount: 1, dest: { country: "Norway" } });
+  assert(!!qNorway.error, `DPD-EMNA no longer serves Norway — should refuse rather than guess, got ${JSON.stringify(qNorway)}`);
 
   // Currency is carried on every card and surfaced on every quote.
   assert(rm.currency === "GBP" && qLocal.currency === "GBP", `UK cards should be priced in GBP, got card=${rm.currency} quote=${qLocal.currency}`);
+
+  // Evri (new this version): 4 speed/POD tiers, 2 weight brackets each.
+  const evri48 = taskG.ukEvri48hCard();
+  const qEvriSmall = taskG.quoteFreight({ card: evri48, totalWeightKg: 1, parcelCount: 1, dest: { zone: "Zone 1" } });
+  assert(!qEvriSmall.error && close(qEvriSmall.perParcelCost, 2.75), `Evri 48H Zone 1 Small (0-1.5kg), got ${JSON.stringify(qEvriSmall)}`);
+  const qEvriMed = taskG.quoteFreight({ card: evri48, totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone 4" } });
+  assert(!qEvriMed.error && close(qEvriMed.perParcelCost, 9), `Evri 48H Zone 4 Medium (1.51-15kg), got ${JSON.stringify(qEvriMed)}`);
+  const qEvriPod = taskG.quoteFreight({ card: taskG.ukEvri24hPodCard(), totalWeightKg: 1, parcelCount: 1, dest: { zone: "Zone 1" } });
+  assert(!qEvriPod.error && close(qEvriPod.perParcelCost, 4.55), `Evri 24H (with POD) Zone 1 Small, got ${JSON.stringify(qEvriPod)}`);
+  // >15kg reclassifies to Evri's unpriced "Light & Large" service — refuse, don't guess.
+  const qEvriOver = taskG.quoteFreight({ card: evri48, totalWeightKg: 16, parcelCount: 1, dest: { zone: "Zone 1" } });
+  assert(!!qEvriOver.quoteRequired, `Evri >15kg should require a manual quote, got ${JSON.stringify(qEvriOver)}`);
+
+  // Yodel (new this version): weight-tiered ladder + a real 3.2% fuel surcharge.
+  const yodel48 = taskG.ukYodel48hCard();
+  const qYodelSmall = taskG.quoteFreight({ card: yodel48, totalWeightKg: 2, parcelCount: 1, dest: { zone: "Zone A" } });
+  assert(!qYodelSmall.error && close(qYodelSmall.perParcelCost, 2.7 * 1.032, 0.01), `Yodel 48H Zone A Small (0-3kg) incl. 3.2% fuel surcharge, got ${JSON.stringify(qYodelSmall)}`);
+  const qYodelMed = taskG.quoteFreight({ card: yodel48, totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone A" } });
+  assert(!qYodelMed.error && close(qYodelMed.perParcelCost, 4.2 * 1.032, 0.01), `Yodel 48H Zone A Medium (3.01-17kg) incl. fuel surcharge, got ${JSON.stringify(qYodelMed)}`);
+  // 24H isn't offered to Zone B (remote areas) at all — refuse, don't guess.
+  const qYodel24Remote = taskG.quoteFreight({ card: taskG.ukYodel24hCard(), totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone B" } });
+  assert(!!qYodel24Remote.error, `Yodel 24H isn't offered to Zone B — should refuse rather than guess, got ${JSON.stringify(qYodel24Remote)}`);
+
+  // defaultRateCards() should wire in all 9 UK cards.
+  const ukDefaults = taskG.defaultRateCards().UK;
+  assert(ukDefaults.length === 9, `UK defaults should have 9 cards, got ${ukDefaults.length}: ${JSON.stringify(ukDefaults.map((c) => c.name))}`);
+  assert(ukDefaults.every((c) => c.currency === "GBP"), "every UK default card should be priced in GBP");
 }
 
 // ---- Real US GPS (USOPS-WH04) rate cards, imported from "IM8 2025 GPS

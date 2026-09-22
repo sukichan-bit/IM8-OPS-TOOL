@@ -596,26 +596,46 @@ function fedexHkIeExportCard() {
 
 
 // ---------- UK (OPS-WH02) — real rate cards ----------
-// Source: "RS UK eFulfillment Rate_VIP4.1_IM8_2026.4.1.xlsx" (provided by
-// the user 2026-09-11), Royal Mail-UK / DPD- UK / DPD-Non-UK tabs. Only
-// Royal Mail and DPD are active services for this warehouse (Evri/Yodel
-// tabs exist in the file but are not in use, so not seeded here).
+// Source: "RS UK eFulfillment Rate_VIP4.1_IM8_2026.9.21.xlsx" (provided by
+// the user 2026-09-22; supersedes the prior "...2026.4.1.xlsx" version),
+// Royal Mail-UK / DPD- UK / DPD-EMNA / Evri / Yodel tabs. This version's
+// Evri and Yodel tabs now carry real rates (the prior version's tabs
+// existed but were "not in use") — both are now seeded as active
+// services per explicit instruction. The file's "Kitting" / "eFulfillment
+// Service Fee" / "Packaging Materials Fee" tabs are warehouse fulfillment
+// costs (labor, handling, packaging materials), not carrier shipping
+// rates — out of scope for this freight calculator, not seeded.
 //
-// Each card folds in the surcharges that always apply for a given zone (so
-// the price is a realistic all-in estimate), and leaves genuinely
-// conditional/exceptional surcharges (oversize, return/redelivery,
-// customs duty, London Congestion Fee, etc.) out of the price — those are
-// listed in `notes` instead of guessed at:
-//   - Royal Mail: "Remote Area Surcharge" (Area 2 +£2.50, Area 3 +£2.00) is
-//     baked into the Area 2/3 bracket prices — it's not conditional, it IS
-//     what defines those zones as remote. "Green Surcharge" (£0.05) and
-//     "Peak Season Surcharge" (£0.12) apply to every package regardless of
-//     zone, so they're the flatSurcharge (£0.17 total).
+// Each card folds in the surcharges that always apply for a given
+// zone/shipment (so the price is a realistic all-in estimate), and leaves
+// genuinely conditional/exceptional surcharges (oversize, return/
+// redelivery, customs duty, London Congestion Fee, etc.) out of the
+// price — those are listed in `notes` instead of guessed at:
+//   - Royal Mail: this version's sheet shows the Area 1/2/3 base price and
+//     the "Remote Area Surcharge" (Area 2 +£2.50, Area 3 +£2.00) as
+//     separate line items, but the combined total for every bracket is
+//     identical to the prior version's already-bundled prices — it's not
+//     conditional, it IS what defines those zones as remote, so it's
+//     still folded into the Area 2/3 bracket prices here. "Green
+//     Surcharge" (£0.05) and "Peak Season Surcharge" (£0.12) apply to
+//     every package regardless of zone, so they're the flatSurcharge
+//     (£0.17 total) — unchanged from before.
 //   - DPD (UK): "Northern Ireland Clearance Surcharge" (£0.60) applies to
-//     every Zone 4 package, baked into that zone's price. Fuel surcharge
-//     is £0, so flatSurcharge is £0.
-//   - DPD (Non-UK): rates already fuel-inclusive; no flat/zone surcharge
-//     to fold in from this sheet.
+//     every Zone 4 package, baked into that zone's price (unchanged
+//     total). New this version: a "DPD Temporary Fuel Surcharge" of
+//     £0.15/package applies to every shipment ("introduced due to
+//     increased carrier operating costs... charged on every shipment") —
+//     folded into flatSurcharge (was £0, now £0.15).
+//   - DPD-EMNA (was "DPD Non-UK"): rates already fuel-inclusive; no flat/
+//     zone surcharge to fold in. Norway has been DROPPED from this
+//     service in this version (was offered before) — confirm with the
+//     carrier if a customer needs Norway. Weight breaks are also coarser
+//     now (four ~2-5kg bands vs. the prior eight finer ones) and the
+//     source prices carry extra decimal precision (apparently FX-
+//     converted) — rounded to 2dp (GBP) here per this file's convention.
+//   - Evri / Yodel: both state their standard Fuel Surcharge is £0/
+//     included — except Yodel, which separately lists a real 3.2% fuel
+//     surcharge applying to every package, folded in as percentSurcharge.
 function ukRoyalMailCard() {
   const card = emptyManualCard("UK", "Royal Mail (UK domestic)", "kg", "cm", "GBP");
   card.zones = ["Area 1", "Area 2", "Area 3"];
@@ -633,7 +653,9 @@ function ukRoyalMailCard() {
     "FK18-19, PO30-41) prices already include the Remote Area Surcharge (Area 2 +£2.50 / Area 3 +£2.00). Max " +
     "weight 20kg; dims must be under 61x46x46cm or Oversize Surcharge (£20) applies — not included here. Other " +
     "surcharges not included (quote separately if applicable): Return Shipping Fee (= outbound rate), Redelivery " +
-    "Fee (£2.30), BFPO not serviceable.";
+    "Fee (£2.30), Delivery interception not supported, BFPO/FBA not serviceable. Claims: £5/claim for items not " +
+    "delivered within 10 working days of scanning (unscanned packages can't be claimed); compensation capped " +
+    "at £15/package, subject to Royal Mail's final decision.";
   return card;
 }
 
@@ -643,37 +665,131 @@ function ukDpdUkCard() {
   card.brackets = [
     { min: 0, max: 30, prices: { "Zone 1": 6.45, "Zone 2": 21, "Zone 3": 18, "Zone 4": 13.6, "Zone 5": 33.5 } },
   ];
-  card.flatSurcharge = 0;
+  card.flatSurcharge = 0.15; // DPD Temporary Fuel Surcharge £0.15, every shipment (new this version)
   card.notes =
     "DPD parcel (DPDUKN / DPDUK2). Zone 1 = Mainland. Zone 2 = Channel Isles (GY, JE). Zone 3 = Scottish " +
     "Highlands/Islands + Isle of Man (AB36-38, FK17-21, IV1-56, IV63, KA27-28, KW1-17, PA20-49, PA60-80, " +
     "PH19-26, PH30-44, PH49-50, HS1-9, ZE1-3, IM1-9). Zone 4 = Northern Ireland (BT1-99) — price already " +
     "includes the Northern Ireland Clearance Surcharge (£0.60/order). Zone 5 = Isles of Scilly (TR21-25). Max " +
     "30kg, 100x70x60cm, girth <230cm or Oversize Surcharge (£24) applies — not included here. Customs duty " +
-    "(Zone 2 / Isle of Man) charged at cost, not included. London Congestion Fee (£1.50, specific London " +
-    "postcodes within Zone 1) not included.";
+    "(Zone 2 / Isle of Man) charged at cost, not included. Other surcharges not included (quote separately if " +
+    "applicable): London Congestion Fee (£1.50, specific London postcodes within Zone 1), Courier Return " +
+    "(= outbound rate), Nothing to Collect (£11/package, failed pickup), 3rd Party Collection (£14/package), " +
+    "Unsuccessful Export Charge (£1.50/order), Non Compatible Surcharge (£7.50/package, packaging/shape " +
+    "issues), optional Insurance (£15/package, up to £4,500 cover).";
   return card;
 }
 
-function ukDpdNonUkCard() {
-  const card = emptyManualCard("UK", "DPD (Non-UK: UAE / Israel / Saudi / Norway)", "kg", "cm", "GBP");
-  card.zones = ["UAE", "Israel", "Saudi Arabia", "Norway"];
-  card.countryZoneMap = { UAE: "UAE", Israel: "Israel", "Saudi Arabia": "Saudi Arabia", Norway: "Norway" };
+function ukDpdEmnaCard() {
+  const card = emptyManualCard("UK", "DPD (EMNA: UAE / Israel / Saudi Arabia)", "kg", "cm", "GBP");
+  card.zones = ["UAE", "Israel", "Saudi Arabia"];
+  card.countryZoneMap = { UAE: "UAE", Israel: "Israel", "Saudi Arabia": "Saudi Arabia" };
   card.brackets = [
-    { min: 0, max: 0.5, prices: { UAE: 12.5, Israel: 20.7, "Saudi Arabia": 18.55, Norway: 25.95 } },
-    { min: 0.51, max: 1, prices: { UAE: 15.5, Israel: 25, "Saudi Arabia": 22.5, Norway: 29.5 } },
-    { min: 1.01, max: 1.5, prices: { UAE: 17.95, Israel: 29.2, "Saudi Arabia": 25.65, Norway: 33.5 } },
-    { min: 1.51, max: 2, prices: { UAE: 19.73, Israel: 33.45, "Saudi Arabia": 29.8, Norway: 36.5 } },
-    { min: 2.01, max: 2.5, prices: { UAE: 22.92, Israel: 37.71, "Saudi Arabia": 34.5, Norway: 39.95 } },
-    { min: 2.51, max: 3, prices: { UAE: 26.1, Israel: 41.95, "Saudi Arabia": 39, Norway: 43.5 } },
-    { min: 3.01, max: 5, prices: { UAE: 38.84, Israel: 58.95, "Saudi Arabia": 55.65, Norway: 58.2 } },
-    { min: 5.01, max: 10, prices: { UAE: 67.5, Israel: 138.5, "Saudi Arabia": 118.95, Norway: 99.89 } },
+    { min: 0, max: 2, prices: { UAE: 30.6, Israel: 35.11, "Saudi Arabia": 34.8 } },
+    { min: 2.01, max: 3, prices: { UAE: 38.56, Israel: 49.64, "Saudi Arabia": 43.72 } },
+    { min: 3.01, max: 5, prices: { UAE: 54.46, Israel: 69.71, "Saudi Arabia": 61.57 } },
+    { min: 5.01, max: 10, prices: { UAE: 112.13, Israel: 174.3, "Saudi Arabia": 173.91 } },
   ];
   card.flatSurcharge = 0;
   card.notes =
-    "Max weight 10kg, max length 100cm, L+H+W < 120cm. Israel service is suspended at the moment (per rate " +
-    "card notes) — confirm before quoting. Rates exclude UK VAT. DDP admin fee/duties charged at cost, not " +
-    "included.";
+    "Max weight 10kg, max length 100cm, L+H+W < 120cm. Transit time: UAE 4-6 working days, Saudi Arabia 4-6 " +
+    "working days, Israel 6-8 working days. Rates exclude UK VAT. Norway was dropped from this service in the " +
+    "2026-09-21 rate sheet (previously offered on this card) — confirm with DPD if a customer needs Norway. " +
+    "Other surcharges not included (quote separately if applicable): Return to Origin Fee (= outbound rate + " +
+    "£5.50/parcel), DDP Service Admin Fee (£6/parcel or 4% of duty/tax, whichever is higher), Duties & Taxes " +
+    "(charged at actual cost, due within 5 days), interception/redirection (£5/shipment if successful).";
+  return card;
+}
+
+// Evri (new this version — 2026-09-21 rate sheet; the tab existed before
+// but wasn't in use). Four named speed/POD tiers, each with two weight
+// brackets (Small 0-1.5kg, Medium 1.51-15kg) across five zones. Weights
+// >15kg, or oversized (>120cm longest side or girth ≥225cm), reclassify
+// to Evri's "Light & Large" service — no price for that is given in this
+// sheet, so it's left unpriced (quoteRequired) rather than guessed at.
+function evriZoneNotes() {
+  return "Zone 1 = UK Mainland. Zone 2 = Scottish Highlands & Islands (ZE, HS, KW, IV, AB36-38, AB54-56, " +
+    "FK17-21, PA20-80, PH15-50, KA27-28, TR21-25). Zone 3 = Channel Islands (GY, JE). Zone 4 = Northern " +
+    "Ireland (BT). Zone 5 = Isle of Man & Isle of Wight (IM, PO). Weights over 15kg, or oversized (longest " +
+    "side > 120cm or girth ≥ 225cm), reclassify to Evri's \"Light & Large\" service — not priced on this sheet, " +
+    "so quote separately. Other surcharges not included (quote separately if applicable): Relabeling " +
+    "(£0.75/package), Undelivered Surcharge (£2/package Small-Medium, £8.50/package Light & Large), Courier " +
+    "Return (£3.25/package Small-Medium, £8.50/package Light & Large), 40L+ Oversized Volume Surcharge " +
+    "(£0.75/package, L×W×H(cm)÷1000 > 40L), Clean Air Levy (£0.45/package, ULEZ/CAZ postcodes), Weight Audit " +
+    "Surcharge, delivery interception (£5/consignment if successful). BFPO/FBA not supported. Claims: " +
+    "£5/claim for items not delivered within 10 working days of scanning (unscanned packages can't be " +
+    "claimed); compensation capped at £15/package, subject to Evri's final decision.";
+}
+function evriBracket(min, max, z1, z2, z3, z4, z5) {
+  return { min, max, prices: { "Zone 1": z1, "Zone 2": z2, "Zone 3": z3, "Zone 4": z4, "Zone 5": z5 } };
+}
+function ukEvri48hCard() {
+  const card = emptyManualCard("UK", "Evri 48H", "kg", "cm", "GBP");
+  card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
+  card.brackets = [evriBracket(0, 1.5, 2.75, 9, 10.5, 9, 10), evriBracket(1.51, 15, 3.45, 9, 10.5, 9, 10)];
+  card.notes = "HERM_48. " + evriZoneNotes();
+  return card;
+}
+function ukEvri48hPodCard() {
+  const card = emptyManualCard("UK", "Evri 48H (with POD)", "kg", "cm", "GBP");
+  card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
+  card.brackets = [evriBracket(0, 1.5, 3.05, 9.5, 11, 9.5, 10.5), evriBracket(1.51, 15, 3.75, 9.5, 11, 9.5, 10.5)];
+  card.notes = "HERM_48_S — includes Proof of Delivery. " + evriZoneNotes();
+  return card;
+}
+function ukEvri24hCard() {
+  const card = emptyManualCard("UK", "Evri 24H", "kg", "cm", "GBP");
+  card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
+  card.brackets = [evriBracket(0, 1.5, 4.25, 9.9, 11.4, 9.9, 10.9), evriBracket(1.51, 15, 5.25, 9.9, 11.4, 9.9, 10.9)];
+  card.notes = "HERM_24. " + evriZoneNotes();
+  return card;
+}
+function ukEvri24hPodCard() {
+  const card = emptyManualCard("UK", "Evri 24H (with POD)", "kg", "cm", "GBP");
+  card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
+  card.brackets = [evriBracket(0, 1.5, 4.55, 10.4, 11.9, 10.4, 11.4), evriBracket(1.51, 15, 5.55, 10.4, 11.9, 10.4, 11.4)];
+  card.notes = "HERM_24_S — includes Proof of Delivery. " + evriZoneNotes();
+  return card;
+}
+
+// Yodel (new this version — 2026-09-21 rate sheet; the tab existed before
+// but wasn't in use). Two zones (Mainland / Remote Areas); named weight
+// tiers (Small/Medium/Large) treated as an ascending, non-overlapping
+// bracket ladder — a shipment is priced at the cheapest tier that covers
+// its weight, same convention as every other UK card here. 24H service
+// has no Small tier and isn't offered to Zone B at all (source shows
+// "/") — left unpriced there rather than guessed at. >30kg isn't
+// accepted by Yodel at all.
+function ukYodel48hCard() {
+  const card = emptyManualCard("UK", "Yodel 48H", "kg", "cm", "GBP");
+  card.zones = ["Zone A", "Zone B"];
+  card.brackets = [
+    { min: 0, max: 3, prices: { "Zone A": 2.7, "Zone B": 7.3 } }, // Small (YDL_SP48)
+    { min: 3.01, max: 17, prices: { "Zone A": 4.2, "Zone B": 9.45 } }, // Medium (YDL_MP48)
+    { min: 17.01, max: 30, prices: { "Zone A": 5.45, "Zone B": 9.45 } }, // Large (YDL_LP48)
+  ];
+  card.percentSurcharge = 0.032; // real 3.2% fuel surcharge, every package (unlike RM/DPD/Evri, not included in the base rate)
+  card.notes =
+    "Zone A = UK Mainland. Zone B = Remote Areas (see Yodel's published remote-area postcode list). Packages " +
+    "over 30kg are not accepted. Other surcharges not included (quote separately if applicable): Overweight " +
+    "Surcharge (£3.50-£80/package, tiered by how far over the tier's weight limit), Oversize Surcharges " +
+    "(£3.50-£80/package, tiered by dims/volume), London Congestion Fee (£1.50/package), Return Shipping Fee " +
+    "(= outbound rate), Non-machinable Parcel Fee (£5/package), Relabelling (£0.50/package), Dimension " +
+    "Discrepancy Fee (£2/package), delivery interception (£5/shipment if successful). BFPO/FBA not supported. " +
+    "Claims: £5/claim, investigation must start within 14 days and formal claim submitted within 28 days of " +
+    "delivery; compensation for loss capped at £25/package, subject to Yodel's final decision.";
+  return card;
+}
+function ukYodel24hCard() {
+  const card = emptyManualCard("UK", "Yodel 24H", "kg", "cm", "GBP");
+  card.zones = ["Zone A", "Zone B"];
+  card.brackets = [
+    { min: 0, max: 17, prices: { "Zone A": 5, "Zone B": null } }, // Medium (YDL_MP24) — not offered to Zone B
+    { min: 17.01, max: 30, prices: { "Zone A": 6, "Zone B": null } }, // Large (YDL_LP24) — not offered to Zone B
+  ];
+  card.percentSurcharge = 0.032; // see ukYodel48hCard() above
+  card.notes = "24H service has no Small-parcel tier and isn't offered to Zone B (remote areas) at all — use " +
+    "Yodel 48H for those. " + ukYodel48hCard().notes;
   return card;
 }
 
@@ -1541,7 +1657,11 @@ function stordStandardDduRnoCard() {
 function defaultRateCards() {
   return {
     HK: [fedexHkIpeExportCard(), fedexHkIpExportCard(), fedexHkIeExportCard()],
-    UK: [ukRoyalMailCard(), ukDpdUkCard(), ukDpdNonUkCard()],
+    UK: [
+      ukRoyalMailCard(), ukDpdUkCard(), ukDpdEmnaCard(),
+      ukEvri48hCard(), ukEvri48hPodCard(), ukEvri24hCard(), ukEvri24hPodCard(),
+      ukYodel48hCard(), ukYodel24hCard(),
+    ],
     NL: [nlSpringPostCard(), nlDhlDeWpCard(), nlDhlNl4uCard(), nlDhlDeKpCard(), nlDhlDePiCard(), nlDpdCard()],
     US_GPS: [
       gpsDdpCard(), gpsDduCard(),
@@ -1865,7 +1985,7 @@ if (typeof window !== "undefined") {
     convertWeight, convertLength, volumetricWeight,
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
-    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
+    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdEmnaCard, ukEvri48hCard, ukEvri48hPodCard, ukEvri24hCard, ukEvri24hPodCard, ukYodel48hCard, ukYodel24hCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
@@ -1879,7 +1999,7 @@ if (typeof module !== "undefined") {
     convertWeight, convertLength, volumetricWeight,
     USPS_ZONE_CHARTS, normalizeUspsZone, lookupUspsZone,
     FREIGHT_WAREHOUSES, getWarehouse,
-    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdNonUkCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
+    emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdEmnaCard, ukEvri48hCard, ukEvri48hPodCard, ukEvri24hCard, ukEvri24hPodCard, ukYodel48hCard, ukYodel24hCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
     computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
