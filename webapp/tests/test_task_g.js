@@ -147,6 +147,14 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   // Surcharge 0.15 (flatSurcharge) = 13.75.
   const qNi = taskG.quoteFreight({ card: dpdUk, totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone 4" } });
   assert(!qNi.error && close(qNi.perParcelCost, 13.75), `DPD UK Zone 4 (Northern Ireland), got ${JSON.stringify(qNi)}`);
+  // 48kg over the 30kg priced ceiling should split (30 + 18kg), not error
+  // out — reported: "48.00 kg exceeds this card's maximum of 30 kg...
+  // splitting isn't enabled".
+  assert(dpdUk.splitAllowed === true, `DPD UK should allow splitting over its 30kg priced ceiling, got splitAllowed=${dpdUk.splitAllowed}`);
+  const qDpdUkHeavy = taskG.quoteFreight({ card: dpdUk, totalWeightKg: 48, parcelCount: 1, dest: { zone: "Zone 1" } });
+  assert(!qDpdUkHeavy.error && !qDpdUkHeavy.quoteRequired, `48kg DPD UK Zone 1 should split rather than error, got ${JSON.stringify(qDpdUkHeavy)}`);
+  assert(Array.isArray(qDpdUkHeavy.split) && qDpdUkHeavy.split.length === 2 && close(qDpdUkHeavy.split[0].weight, 30) && close(qDpdUkHeavy.split[1].weight, 18), `48kg should split into 30+18kg, got ${JSON.stringify(qDpdUkHeavy.split)}`);
+  assert(qDpdUkHeavy.packingConfirmationRequired === true, "a split DPD UK quote should be flagged as needing packing confirmation");
 
   const dpdEmna = taskG.ukDpdEmnaCard();
   // Country -> zone resolution should work directly off the country name (identity map).
@@ -182,6 +190,13 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   // 24H isn't offered to Zone B (remote areas) at all — refuse, don't guess.
   const qYodel24Remote = taskG.quoteFreight({ card: taskG.ukYodel24hCard(), totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone B" } });
   assert(!!qYodel24Remote.error, `Yodel 24H isn't offered to Zone B — should refuse rather than guess, got ${JSON.stringify(qYodel24Remote)}`);
+  // Yodel explicitly refuses packages over 30kg outright — should split
+  // into multiple real sub-30kg parcels rather than error out.
+  assert(yodel48.splitAllowed === true && yodel48.maxPhysicalWeight === 30, `Yodel 48H should allow splitting up to its stated 30kg physical max, got splitAllowed=${yodel48.splitAllowed} maxPhysicalWeight=${yodel48.maxPhysicalWeight}`);
+  const qYodelHeavy = taskG.quoteFreight({ card: yodel48, totalWeightKg: 48, parcelCount: 1, dest: { zone: "Zone A" } });
+  assert(!qYodelHeavy.error && !qYodelHeavy.quoteRequired, `48kg Yodel 48H Zone A should split rather than error, got ${JSON.stringify(qYodelHeavy)}`);
+  assert(Array.isArray(qYodelHeavy.split) && qYodelHeavy.split.length === 2 && close(qYodelHeavy.split[0].weight, 30) && close(qYodelHeavy.split[1].weight, 18), `48kg should split into 30+18kg, got ${JSON.stringify(qYodelHeavy.split)}`);
+  assert(qYodelHeavy.packingConfirmationRequired === true, "a split Yodel quote should be flagged as needing packing confirmation");
 
   // defaultRateCards() should wire in all 9 UK cards.
   const ukDefaults = taskG.defaultRateCards().UK;

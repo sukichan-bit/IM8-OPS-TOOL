@@ -666,17 +666,29 @@ function ukDpdUkCard() {
     { min: 0, max: 30, prices: { "Zone 1": 6.45, "Zone 2": 21, "Zone 3": 18, "Zone 4": 13.6, "Zone 5": 33.5 } },
   ];
   card.flatSurcharge = 0.15; // DPD Temporary Fuel Surcharge £0.15, every shipment (new this version)
+  // The source sheet only prices a single 0-30kg bracket, but weights (or
+  // dims) beyond that trigger an Oversize Surcharge (£24) rather than an
+  // outright rejection — DPD doesn't state a hard per-package ceiling.
+  // With no priced formula for what a single heavier package would cost,
+  // split into multiple 30kg-or-under consignments (same as every other
+  // split-enabled card here) so a heavy order still quotes rather than
+  // erroring — flagged as needing packing confirmation, since a real
+  // single oversized parcel + the £24 surcharge is also a legitimate
+  // option the sheet doesn't give us a price for either way.
+  card.splitAllowed = true;
   card.notes =
     "DPD parcel (DPDUKN / DPDUK2). Zone 1 = Mainland. Zone 2 = Channel Isles (GY, JE). Zone 3 = Scottish " +
     "Highlands/Islands + Isle of Man (AB36-38, FK17-21, IV1-56, IV63, KA27-28, KW1-17, PA20-49, PA60-80, " +
     "PH19-26, PH30-44, PH49-50, HS1-9, ZE1-3, IM1-9). Zone 4 = Northern Ireland (BT1-99) — price already " +
     "includes the Northern Ireland Clearance Surcharge (£0.60/order). Zone 5 = Isles of Scilly (TR21-25). Max " +
-    "30kg, 100x70x60cm, girth <230cm or Oversize Surcharge (£24) applies — not included here. Customs duty " +
-    "(Zone 2 / Isle of Man) charged at cost, not included. Other surcharges not included (quote separately if " +
-    "applicable): London Congestion Fee (£1.50, specific London postcodes within Zone 1), Courier Return " +
-    "(= outbound rate), Nothing to Collect (£11/package, failed pickup), 3rd Party Collection (£14/package), " +
-    "Unsuccessful Export Charge (£1.50/order), Non Compatible Surcharge (£7.50/package, packaging/shape " +
-    "issues), optional Insurance (£15/package, up to £4,500 cover).";
+    "30kg, 100x70x60cm, girth <230cm or Oversize Surcharge (£24) applies — not included here (a shipment over " +
+    "30kg is priced here as a split into multiple sub-30kg consignments; a single oversized package + the £24 " +
+    "surcharge is a real alternative this sheet doesn't give us a price for — confirm actual packing with DPD " +
+    "before quoting). Customs duty (Zone 2 / Isle of Man) charged at cost, not included. Other surcharges not " +
+    "included (quote separately if applicable): London Congestion Fee (£1.50, specific London postcodes " +
+    "within Zone 1), Courier Return (= outbound rate), Nothing to Collect (£11/package, failed pickup), 3rd " +
+    "Party Collection (£14/package), Unsuccessful Export Charge (£1.50/order), Non Compatible Surcharge " +
+    "(£7.50/package, packaging/shape issues), optional Insurance (£15/package, up to £4,500 cover).";
   return card;
 }
 
@@ -769,9 +781,16 @@ function ukYodel48hCard() {
     { min: 17.01, max: 30, prices: { "Zone A": 5.45, "Zone B": 9.45 } }, // Large (YDL_LP48)
   ];
   card.percentSurcharge = 0.032; // real 3.2% fuel surcharge, every package (unlike RM/DPD/Evri, not included in the base rate)
+  // Yodel explicitly states packages over 30kg are refused outright (not
+  // just surcharged) — so a heavier order genuinely needs splitting into
+  // multiple real ≤30kg parcels, not a single oversized one.
+  card.splitAllowed = true;
+  card.maxPhysicalWeight = 30;
   card.notes =
     "Zone A = UK Mainland. Zone B = Remote Areas (see Yodel's published remote-area postcode list). Packages " +
-    "over 30kg are not accepted. Other surcharges not included (quote separately if applicable): Overweight " +
+    "over 30kg are not accepted — a heavier shipment is priced here as a split into multiple sub-30kg " +
+    "parcels; confirm actual packing before quoting. Other surcharges not included (quote separately if " +
+    "applicable): Overweight " +
     "Surcharge (£3.50-£80/package, tiered by how far over the tier's weight limit), Oversize Surcharges " +
     "(£3.50-£80/package, tiered by dims/volume), London Congestion Fee (£1.50/package), Return Shipping Fee " +
     "(= outbound rate), Non-machinable Parcel Fee (£5/package), Relabelling (£0.50/package), Dimension " +
@@ -788,6 +807,8 @@ function ukYodel24hCard() {
     { min: 17.01, max: 30, prices: { "Zone A": 6, "Zone B": null } }, // Large (YDL_LP24) — not offered to Zone B
   ];
   card.percentSurcharge = 0.032; // see ukYodel48hCard() above
+  card.splitAllowed = true; // see ukYodel48hCard() above — same 30kg refusal threshold
+  card.maxPhysicalWeight = 30;
   card.notes = "24H service has no Small-parcel tier and isn't offered to Zone B (remote areas) at all — use " +
     "Yodel 48H for those. " + ukYodel48hCard().notes;
   return card;
