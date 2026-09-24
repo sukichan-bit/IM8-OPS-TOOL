@@ -7083,6 +7083,37 @@ function findCountryZone(countryZoneMap, country) {
   return null;
 }
 
+// True for anything a user would reasonably type for "United States" in
+// the free-text destination-country field — used only to decide whether
+// a plain "enter a 5-digit ZIP" message is actually actionable (a USPS-
+// zoned domestic card can't quote anywhere else), never to resolve a
+// zone itself.
+function isUnitedStatesCountryText(country) {
+  const target = String(country || "").trim().toLowerCase().replace(/\./g, "");
+  return /^(united states( of america)?|usa|us)$/.test(target);
+}
+
+function isCanadaCountryText(country) {
+  return /^canada$/i.test(String(country || "").trim());
+}
+
+// Some international rate cards (e.g. Stord's DDP/DDU cards) price
+// Canada as two separate zones, "Canada (Major)" / "Canada (Rural)",
+// rather than one flat country rate — genuinely different prices, not a
+// formatting quirk (see e.g. stordPriorityDdpAtlCard: Major $96.72 vs.
+// Rural $100.36). Rather than force a manual pick every time, detect it
+// from the postal code itself using Canada Post's own published rule:
+// the 2nd character of a Canadian postal code (FSA) is "0" for a rural
+// Forward Sortation Area, non-zero for urban/suburban — e.g. "T1J 1Y6"
+// -> "1" -> Major; "K0A 1G0" -> "0" -> Rural. Returns "Major" | "Rural"
+// | null (not a recognizable Canadian postal code shape — refuse to
+// guess rather than default to either).
+function resolveCanadaMajorRural(postalCode) {
+  const cleaned = String(postalCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(cleaned)) return null;
+  return cleaned[1] === "0" ? "Rural" : "Major";
+}
+
 // Resolves which price column ("zone") applies to a destination, given
 // the card's zone source. dest = { country, zone, zip }. An explicit
 // dest.zone always wins over auto-detection (a deliberate manual
@@ -7093,6 +7124,15 @@ function resolveZone(card, dest) {
   dest = dest || {};
   if (dest.zone && card.zones.includes(dest.zone)) return { zone: dest.zone, manualOverride: true };
   if (card.zoneSource === "usps") {
+    // A USPS-zoned card is domestic-only — if the destination country is
+    // filled in and clearly isn't the US, say so plainly (and point at
+    // this warehouse's international cards) instead of the generic
+    // "enter a 5-digit ZIP" message, which reads as a demand for a US
+    // ZIP on an obviously non-US address rather than what it actually
+    // means (wrong card for this destination).
+    if (dest.country && !isUnitedStatesCountryText(dest.country)) {
+      return { error: `"${dest.country}" isn't a US destination — this is a domestic USPS-zoned rate card and can't quote it. Pick one of this warehouse's international rate cards instead.` };
+    }
     const wh = getWarehouse(card.warehouseId);
     if (!wh || !wh.uspsOriginZip3) return { error: "This warehouse has no USPS origin ZIP configured for zone lookup." };
     const named = resolveStordNamedZone(dest.zip);
@@ -7105,6 +7145,19 @@ function resolveZone(card, dest) {
     return { zone: z.zone, raw: z.raw, autoDetected: true };
   }
   if (card.zones.length === 1) return { zone: card.zones[0] };
+  // Canada (Major)/(Rural) split — see resolveCanadaMajorRural() above.
+  if (isCanadaCountryText(dest.country)) {
+    const majorKey = Object.keys(card.countryZoneMap).find((k) => /^canada\s*\(major\)$/i.test(k.trim()));
+    const ruralKey = Object.keys(card.countryZoneMap).find((k) => /^canada\s*\(rural\)$/i.test(k.trim()));
+    if (majorKey && ruralKey) {
+      const variant = resolveCanadaMajorRural(dest.zip);
+      if (variant) {
+        const key = variant === "Rural" ? ruralKey : majorKey;
+        return { zone: card.countryZoneMap[key], raw: key, autoDetected: true };
+      }
+      return { error: `This rate card splits Canada into Major/Rural zones — enter a Canadian postal code (e.g. "T1J 1Y6") to auto-detect, or pick the zone manually.` };
+    }
+  }
   const byCountry = findCountryZone(card.countryZoneMap, dest.country);
   if (byCountry) return { zone: byCountry, raw: byCountry, autoDetected: true };
   return { error: "Pick a destination zone (or country) for this rate card." };
@@ -7251,7 +7304,7 @@ if (typeof window !== "undefined") {
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdEmnaCard, ukEvri48hCard, ukEvri48hPodCard, ukEvri24hCard, ukEvri24hPodCard, ukYodel48hCard, ukYodel24hCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
-    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
+    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveCanadaMajorRural, isUnitedStatesCountryText, isCanadaCountryText, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
     newProductId, defaultProductCatalog, emptyProduct, computeOrderWeights, resolveShipmentWeight, CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG,
   };
 }
@@ -7265,7 +7318,7 @@ if (typeof module !== "undefined") {
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdEmnaCard, ukEvri48hCard, ukEvri48hPodCard, ukEvri24hCard, ukEvri24hPodCard, ukYodel48hCard, ukYodel24hCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
-    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
+    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveCanadaMajorRural, isUnitedStatesCountryText, isCanadaCountryText, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
     newProductId, defaultProductCatalog, emptyProduct, computeOrderWeights, resolveShipmentWeight, CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG,
   };
 }

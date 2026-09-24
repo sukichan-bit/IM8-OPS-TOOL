@@ -608,6 +608,34 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   const qStdDduCanada = taskG.quoteFreight({ card: standardDdu, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "Canada (Major)" } });
   assert(!qStdDduCanada.error && close(qStdDduCanada.perParcelCost, 14.07), `Stord Standard DDU 1lb to Canada (Major), got ${JSON.stringify(qStdDduCanada)}`);
   assert(standardDdu.zones.every((z) => z.length > 3 || /^Canada/.test(z)), `Standard DDU zones should be full country names, not 2-letter codes, got a sample: ${JSON.stringify(standardDdu.zones.slice(0, 10))}`);
+
+  // ---- Reported bug: typing plain "Canada" (as any real user would,
+  // not the literal zone label "Canada (Major)") plus a real Canadian
+  // postal code should auto-detect Major vs. Rural, not demand a manual
+  // pick or (worse) a US ZIP. ----
+  assert(taskG.resolveCanadaMajorRural("T1J 1Y6") === "Major", `T1J 1Y6 (2nd char "1") should resolve to Major, got ${taskG.resolveCanadaMajorRural("T1J 1Y6")}`);
+  assert(taskG.resolveCanadaMajorRural("K0A 1G0") === "Rural", `K0A 1G0 (2nd char "0") should resolve to Rural, got ${taskG.resolveCanadaMajorRural("K0A 1G0")}`);
+  assert(taskG.resolveCanadaMajorRural("not-a-postal-code") === null, "an unrecognizable postal code shape should return null, not guess");
+
+  const zoneMajor = taskG.resolveZone(standardDdp, { country: "Canada", zip: "T1J 1Y6" });
+  assert(!zoneMajor.error && zoneMajor.zone === "Canada (Major)" && zoneMajor.autoDetected === true, `plain "Canada" + a major-FSA postcode should auto-detect Canada (Major), got ${JSON.stringify(zoneMajor)}`);
+  const zoneRural = taskG.resolveZone(standardDdp, { country: "Canada", zip: "K0A 1G0" });
+  assert(!zoneRural.error && zoneRural.zone === "Canada (Rural)" && zoneRural.autoDetected === true, `plain "Canada" + a rural-FSA postcode should auto-detect Canada (Rural), got ${JSON.stringify(zoneRural)}`);
+  const qCanadaPlain = taskG.quoteFreight({ card: standardDdp, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { country: "Canada", zip: "T1J1Y6" } });
+  assert(!qCanadaPlain.error && close(qCanadaPlain.perParcelCost, 8.98), `end-to-end quote for plain "Canada" (no postal code punctuation) should match the Canada (Major) rate, got ${JSON.stringify(qCanadaPlain)}`);
+  // No postal code at all -> refuse rather than default to either.
+  const zoneNoZip = taskG.resolveZone(standardDdp, { country: "Canada" });
+  assert(!!zoneNoZip.error, `"Canada" with no postal code should refuse to guess Major vs. Rural, got ${JSON.stringify(zoneNoZip)}`);
+
+  // Reported bug, other half: a domestic USPS-zoned Stord card given an
+  // obviously non-US country should say so plainly, not ask for "a
+  // 5-digit US ZIP" as if the input were merely malformed.
+  const stordDomestic = defaults.US_STORD_ATL.find((c) => c.name === "Stord Economy");
+  const domesticCanada = taskG.resolveZone(stordDomestic, { country: "Canada", zip: "T1J1Y6" });
+  assert(!!domesticCanada.error && /isn't a US destination/.test(domesticCanada.error), `a domestic USPS card given a Canada destination should say so, not ask for a US ZIP, got ${JSON.stringify(domesticCanada)}`);
+  // ...but a blank country (the normal way to enter a domestic US quote) must still work as before.
+  const domesticBlankCountry = taskG.resolveZone(stordDomestic, { country: "", zip: "90001" });
+  assert(!domesticBlankCountry.error && domesticBlankCountry.zone === "8", `a blank country + US ZIP should still resolve normally, got ${JSON.stringify(domesticBlankCountry)}`);
 }
 
 // ==================================================================
