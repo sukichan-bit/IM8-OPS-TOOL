@@ -619,6 +619,21 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qStdDduCanada.error && close(qStdDduCanada.perParcelCost, 14.07), `Stord Standard DDU 1lb to Canada (Major), got ${JSON.stringify(qStdDduCanada)}`);
   assert(standardDdu.zones.every((z) => z.length > 3 || /^Canada/.test(z)), `Standard DDU zones should be full country names, not 2-letter codes, got a sample: ${JSON.stringify(standardDdu.zones.slice(0, 10))}`);
 
+  // Reported: "36.74 lb exceeds this card's maximum of 4.4 lb, and
+  // splitting into multiple consignments isn't enabled for this card"
+  // on Standard DDU. Confirmed against the real source file's OVERVIEW
+  // tab that the $3.00/lb-over-max, $50-min overage rule is stated
+  // generically for every Stord rate card, not just Priority DDP/
+  // International DDU — so all 3 "3 more international services" cards
+  // (Standard DDP, Expedited DDP, Standard DDU) also get it.
+  for (const c of [standardDdp, expeditedDdp, standardDdu]) {
+    assert(c.overageRatePerUnit === 3 && c.overageMinCharge === 50, `${c.name} should use the universal Stord overage rate, got overageRatePerUnit=${c.overageRatePerUnit} overageMinCharge=${c.overageMinCharge}`);
+  }
+  const qDduOverage = taskG.quoteFreight({ card: standardDdu, totalWeightKg: taskG.convertWeight(36.74, "lb", "kg"), parcelCount: 1, dest: { country: "Germany" } });
+  assert(!qDduOverage.error && !qDduOverage.quoteRequired && qDduOverage.overageApplied === true, `36.74lb Standard DDU (4.4lb max) to Germany should price via the overage rate, got ${JSON.stringify(qDduOverage)}`);
+  // 32.34lb over the 4.4lb max: 32.34 × $3 = $97.02, above the $50 minimum.
+  assert(close(qDduOverage.overageAmount, 97.02), `overage amount for 36.74lb over a 4.4lb max, got ${qDduOverage.overageAmount}`);
+
   // ---- Reported bug: typing plain "Canada" (as any real user would,
   // not the literal zone label "Canada (Major)") plus a real Canadian
   // postal code should auto-detect Major vs. Rural, not demand a manual
