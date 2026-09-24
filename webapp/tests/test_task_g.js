@@ -593,6 +593,16 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qDdp.error && close(qDdp.perParcelCost, 139.49), `Stord Priority DDP 5lb to Australia, got ${JSON.stringify(qDdp)}`);
   assert(!qDdp.expired, "the Stord rate card has no stated expiry date, so shouldn't be auto-flagged expired");
 
+  // Reported: "36.74 lb exceeds this card's maximum of 30 lb, and
+  // splitting into multiple consignments isn't enabled for this card."
+  // Priority DDP's own notes document a real overage rate (+$3.00/lb
+  // over the max, min $50) — should price directly via that formula,
+  // not error out or fake a multi-parcel split.
+  assert(ddpAtl.overageRatePerUnit === 3 && ddpAtl.overageMinCharge === 50 && !ddpAtl.splitAllowed, `Priority DDP should use the documented overage rate, got overageRatePerUnit=${ddpAtl.overageRatePerUnit} overageMinCharge=${ddpAtl.overageMinCharge} splitAllowed=${ddpAtl.splitAllowed}`);
+  const qDdpOverage = taskG.quoteFreight({ card: ddpAtl, totalWeightKg: taskG.convertWeight(36.74, "lb", "kg"), parcelCount: 1, dest: { country: "Australia" } });
+  assert(!qDdpOverage.error && !qDdpOverage.quoteRequired && !qDdpOverage.split, `36.74lb Priority DDP to Australia should price, not error or split, got ${JSON.stringify(qDdpOverage)}`);
+  assert(qDdpOverage.overageApplied === true && close(qDdpOverage.overageAmount, 50) && close(qDdpOverage.totalCost, 541.51), `36.74lb (6.74lb over, ×$3=$20.22 < $50 min) should hit the $50 minimum, top bracket 491.51 + 50 = 541.51, got ${JSON.stringify(qDdpOverage)}`);
+
   // Canada, specifically — the point of adding these 3 extra cards — must
   // resolve on all three, at meaningfully different (tiered) prices, not
   // just the one card RATE CARD already covered it on.
@@ -779,7 +789,11 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
 {
   const defaults = taskG.defaultRateCards();
   const econ = defaults.US_STORD_ATL.find((c) => c.name === "Stord Economy");
-  assert(econ.zoneSource === "usps" && econ.splitAllowed === true, `Stord Economy should auto-detect zone and allow splitting, got zoneSource=${econ.zoneSource} splitAllowed=${econ.splitAllowed}`);
+  // Stord's own "Common Accessorials" tab documents a real per-lb
+  // over-max overage rate (+$3.00/lb, min $50) uniformly across every
+  // Stord service (domestic and international) — that supersedes the
+  // fake-split-into-consignments behavior used before this was found.
+  assert(econ.zoneSource === "usps" && econ.overageRatePerUnit === 3 && econ.overageMinCharge === 50, `Stord Economy should auto-detect zone and use the real over-max overage rate, got zoneSource=${econ.zoneSource} overageRatePerUnit=${econ.overageRatePerUnit} overageMinCharge=${econ.overageMinCharge}`);
 
   // A plain continental destination resolves automatically, no manual zone needed.
   const qAuto = taskG.quoteFreight({ card: econ, totalWeightKg: taskG.convertWeight(1, "lb", "kg"), parcelCount: 1, dest: { zip: "90210" } });
@@ -800,11 +814,19 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qManual.error && qManual.zone === "Hawaii Metro" && qManual.zoneManualOverride === true && !qManual.zoneAutoDetected,
     `manual override should be honored and labelled, got ${JSON.stringify(qManual)}`);
 
-  // Splitting a real Stord card over its own max, end to end.
+  // A real Stord card over its own max, end to end — priced via the
+  // documented overage rate (top-bracket price + max(overWeight × $3,
+  // $50)), not split into fake consignments: 300lb is 150lb over the
+  // 150lb max, so overage = max(150 × 3, 50) = 450.
   const groundComm = defaults.US_STORD_ATL.find((c) => c.name === "Stord Ground Standard (Commercial)");
-  const qSplit = taskG.quoteFreight({ card: groundComm, totalWeightKg: taskG.convertWeight(300, "lb", "kg"), parcelCount: 1, dest: { zip: "90210" } });
-  assert(!qSplit.error && qSplit.split && qSplit.split.length === 2 && close(qSplit.totalCost, 192.76),
-    `300lb over Ground Standard Commercial's 150lb max should split into 2 x 150lb, got ${JSON.stringify(qSplit)}`);
+  const qOverage = taskG.quoteFreight({ card: groundComm, totalWeightKg: taskG.convertWeight(300, "lb", "kg"), parcelCount: 1, dest: { zip: "90210" } });
+  assert(!qOverage.error && !qOverage.split && qOverage.overageApplied === true && close(qOverage.overageAmount, 450) && close(qOverage.totalCost, 546.38),
+    `300lb over Ground Standard Commercial's 150lb max should price via the overage rate, not split, got ${JSON.stringify(qOverage)}`);
+
+  // Below the $50 minimum threshold: 155lb is only 5lb over the 150lb
+  // max (5 × 3 = 15 < 50), so the $50 minimum applies instead.
+  const qOverageMin = taskG.quoteFreight({ card: groundComm, totalWeightKg: taskG.convertWeight(155, "lb", "kg"), parcelCount: 1, dest: { zip: "90210" } });
+  assert(!qOverageMin.error && qOverageMin.overageApplied === true && close(qOverageMin.overageAmount, 50), `155lb (5lb over) should hit the $50 minimum overage, not 5×$3=$15, got ${JSON.stringify(qOverageMin)}`);
 }
 
 // ---- compareWarehouseQuotes(): cross-warehouse comparison, cheapest first ----

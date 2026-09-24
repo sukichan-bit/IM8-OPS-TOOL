@@ -1500,118 +1500,146 @@ function stordEconomyAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Economy", "lb", "in");
   Object.assign(card, STORD_ECONOMY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordEconomyRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Economy", "lb", "in");
   Object.assign(card, STORD_ECONOMY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordGroundResidentialAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Ground Standard (Residential)", "lb", "in");
   Object.assign(card, STORD_GROUND_RESIDENTIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordGroundResidentialRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Ground Standard (Residential)", "lb", "in");
   Object.assign(card, STORD_GROUND_RESIDENTIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordGroundCommercialAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Ground Standard (Commercial)", "lb", "in");
   Object.assign(card, STORD_GROUND_COMMERCIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordGroundCommercialRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Ground Standard (Commercial)", "lb", "in");
   Object.assign(card, STORD_GROUND_COMMERCIAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordSecondDayAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Second Day", "lb", "in");
   Object.assign(card, STORD_SECOND_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordSecondDayRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Second Day", "lb", "in");
   Object.assign(card, STORD_SECOND_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stord3DayAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord 3 Day", "lb", "in");
   Object.assign(card, STORD_3_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stord3DayRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord 3 Day", "lb", "in");
   Object.assign(card, STORD_3_DAY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordOvernightAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Overnight", "lb", "in");
   Object.assign(card, STORD_OVERNIGHT_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordOvernightRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Overnight", "lb", "in");
   Object.assign(card, STORD_OVERNIGHT_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordBpmAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord BPM (Bound Printed Matter)", "lb", "in");
   Object.assign(card, STORD_BPM_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
 function stordBpmRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord BPM (Bound Printed Matter)", "lb", "in");
   Object.assign(card, STORD_BPM_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.zoneSource = "usps"; // real USPS zone chart lookup by destination ZIP, per warehouse origin (see resolveZone())
-  card.splitAllowed = true; // domestic small-parcel service — splitting an over-max shipment into multiple consignments is standard practice
+  card.overageRatePerUnit = 3.0; // Stord Common Accessorials: +$3.00/lb over the max, minimum $50 (see stordPriorityDdpAtlCard() above) — supersedes the old fake-split-into-consignments behavior with the carrier's real single-package overage rule
+  card.overageMinCharge = 50;
   return card;
 }
+// Both Priority DDP and International DDU document the same over-max
+// rule in their source notes ("Above-max-weight surcharge: +$3.00/lb
+// over the max, minimum $50") — a real single-package billing formula,
+// not an oversize/rejection case, so it's applied directly rather than
+// left as a "not included" exclusion or forced into a fake multi-parcel
+// split (see priceWeightForCard()'s overageRatePerUnit/overageMinCharge).
 function stordPriorityDdpAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord Priority DDP (International)", "lb", "in");
   Object.assign(card, STORD_PRIORITY_DDP_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.overageRatePerUnit = 3.0;
+  card.overageMinCharge = 50;
   return card;
 }
 function stordPriorityDdpRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord Priority DDP (International)", "lb", "in");
   Object.assign(card, STORD_PRIORITY_DDP_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.overageRatePerUnit = 3.0;
+  card.overageMinCharge = 50;
   return card;
 }
 function stordInternationalDduAtlCard() {
   const card = emptyManualCard("US_STORD_ATL", "Stord International DDU", "lb", "in");
   Object.assign(card, STORD_INTERNATIONAL_DDU_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.overageRatePerUnit = 3.0; // see stordPriorityDdpAtlCard() above
+  card.overageMinCharge = 50;
   return card;
 }
 function stordInternationalDduRnoCard() {
   const card = emptyManualCard("US_STORD_RNO", "Stord International DDU", "lb", "in");
   Object.assign(card, STORD_INTERNATIONAL_DDU_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.overageRatePerUnit = 3.0; // see stordPriorityDdpAtlCard() above
+  card.overageMinCharge = 50;
   return card;
 }
 
@@ -1931,8 +1959,15 @@ function resolveZone(card, dest) {
 //     flatSurcharge, cost } — surcharges are applied per consignment,
 //     matching how a carrier would actually bill separately-rated
 //     shipments;
-//   { quoteRequired: true, reason } — over the max, but splitting isn't
-//     enabled or there isn't enough information to propose one;
+//   { price, ..., split: null, overageApplied: true, overageAmount } — a
+//     card with a documented per-unit overage rate (card.overageRatePerUnit
+//     + card.overageMinCharge, e.g. Stord DDP's "+$3.00/lb over the max,
+//     minimum $50") prices a single package directly: top-bracket price +
+//     max(overWeight × rate, minCharge). Takes priority over splitting —
+//     it's the carrier's own real single-package billing rule, not a
+//     guess, so there's no need to fabricate a multi-parcel split;
+//   { quoteRequired: true, reason } — over the max, but neither an
+//     overage rate nor splitting is available/enabled for this card;
 //   { error } — some other pricing failure (e.g. no price for this zone),
 //     unrelated to being over the weight max.
 function priceWeightForCard(card, zone, weight) {
@@ -1952,6 +1987,14 @@ function priceWeightForCard(card, zone, weight) {
   const tableMax = cardRateTableMaxWeight(card);
   const overMax = tableMax != null && weight > tableMax;
   if (!overMax) return direct; // a different pricing failure (e.g. missing zone price) — surface as-is, not a split case
+
+  if (card.overageRatePerUnit > 0) {
+    const top = priceForZone(card, zone, tableMax); // the top bracket's own price for this zone
+    if (top.error) return top;
+    const overageAmount = Math.round(Math.max((weight - tableMax) * card.overageRatePerUnit, Number(card.overageMinCharge) || 0) * 100) / 100;
+    const s = withSurcharges(top.price + overageAmount);
+    return { price: s.total, baseCost: s.baseCost, percentAmount: s.percentAmount, flatSurcharge: s.flatSurcharge, split: null, overageApplied: true, overageAmount };
+  }
 
   if (!card.splitAllowed) {
     return { quoteRequired: true, reason: `${weight.toFixed(2)} ${card.weightUnit} exceeds this card's maximum of ${tableMax} ${card.weightUnit}, and splitting into multiple consignments isn't enabled for this card.` };
@@ -2017,6 +2060,9 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
     // a weight breakdown, so the caller should label it as an estimate
     // pending packing confirmation rather than a firm quote.
     packingConfirmationRequired: !!priced.split,
+    // A documented per-unit overage rate was applied (see priceWeightForCard()) — a firm single-package price, not an estimate.
+    overageApplied: !!priced.overageApplied,
+    overageAmount: priced.overageAmount || 0,
     ...zoneFlags,
     // Not an error — an expired card is still the best estimate available
     // until a fresh one is entered, but the caller should flag it clearly.

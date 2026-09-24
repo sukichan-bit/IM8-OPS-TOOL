@@ -3384,6 +3384,9 @@ function renderQuoteBreakdown(container, quote, card, warehouseName) {
     splitTable.appendChild(splitBody);
     container.appendChild(splitTable);
   } else {
+    if (quote.overageApplied) {
+      container.appendChild(h("p", { class: "info", text: `This shipment exceeds the rate card's maximum weight — priced as the top weight bracket plus this card's documented over-max overage rate (${fmtMoney(quote.overageAmount)}), not a split into multiple parcels.` }));
+    }
     const surchargeParts = [];
     if (quote.percentSurcharge) surchargeParts.push(`+ ${(quote.percentSurcharge * 100).toFixed(2)}% fuel/surcharge ${fmtMoney(quote.percentAmount)}`);
     if (quote.flatSurcharge) surchargeParts.push(`+ flat surcharge ${fmtMoney(quote.flatSurcharge)}`);
@@ -3439,6 +3442,7 @@ function renderTaskGComparisonTable(container, results) {
       const notes = [];
       if (isUnfilled(r)) notes.push("rate card appears blank/unfilled — $0.00 isn't a real quote");
       if (r.split) notes.push("split into multiple consignments — estimate pending packing confirmation");
+      if (r.overageApplied) notes.push(`over max weight — includes a ${fmtMoney(r.overageAmount)} overage surcharge`);
       if (r.expired) notes.push("rate card expired");
       tr.appendChild(h("td", { text: notes.join("; ") || "" }));
     }
