@@ -301,7 +301,7 @@ async function loadWorkbookOrCsv(file) {
   const buf = await file.arrayBuffer();
   if (io.isExcelFilename(file.name)) {
     const wb = io.loadWorkbook(buf, file.name);
-    return { kind: "xlsx", wb, sheets: io.listSheets(wb) };
+    return { kind: "xlsx", wb, sheets: io.listSheets(wb), buf, filename: file.name };
   }
   if (/\.pdf$/i.test(file.name)) {
     // A D365 "Inventory aging report" PDF export — no real table structure,
@@ -397,6 +397,20 @@ async function setupFileUI(container, file, candidates, extraOptional) {
     const guesses = {};
     for (const [field, candList] of Object.entries(candidates)) guesses[field] = io.fuzzyMatchColumn(columns, candList);
     state.colMap = { ...guesses };
+
+    // Fulfillment-report files only (the only candidates set with a
+    // "shipped_date" field): re-derive that one column's dates straight from
+    // their raw Excel serials, bypassing SheetJS's own numeric-to-Date
+    // conversion, which was found wrong by ~8h for a real WH04 Chinese-WMS
+    // ("出库单"/OutboundTime) export. Deliberately scoped to just this
+    // column/file-type — the same swap applied tool-wide once and broke an
+    // already ops-verified-correct date elsewhere (Task C's Refund Date
+    // resolution), so it must never spread beyond this one field.
+    if (source.kind === "xlsx" && candidates.shipped_date && guesses.shipped_date) {
+      state.rows = io.recomputeDateColumnFromRawSerials(
+        source.buf, source.filename, sheetName, headerRow, guesses.shipped_date, state.rows
+      );
+    }
 
     const detected = Object.entries(guesses).filter(([, v]) => v).map(([f, v]) => `${FIELD_LABELS[f] || f} → '${v}'`).join(", ");
     caption.textContent = `Loaded ${state.rows.length} rows from '${sheetName || "(csv)"}', header row ${headerRow}. Detected: ${detected}`;

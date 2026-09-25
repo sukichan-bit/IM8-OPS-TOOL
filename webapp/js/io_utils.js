@@ -74,6 +74,56 @@ function loadWorkbook(fileBytes, filename) {
   return XLSXLib.read(data, { type: "array", cellDates: true });
 }
 
+// Re-derives ONE column's date values directly from their raw Excel serial
+// numbers, discarding whatever Date objects cellDates:true already produced
+// for them. Scoped deliberately narrow (never touches loadWorkbook/every
+// date in the tool) — a real WH04 (Chinese WMS "出库单" export) fulfillment
+// report was found to have its "OutboundTime" column misconverted by
+// SheetJS's own numeric-to-Date logic, off by a consistent ~8 hours
+// (verified against that cell's own cached formatted string, e.g. serial
+// 46282.230787037035: SheetJS said 2026-09-16T21:31:38Z, the cell's own "w"
+// display says "2026-09-17 05:32:20", and the standard 1900-date-system
+// formula below matches the cell's own display exactly) — shifting a
+// pre-dawn outbound timestamp back to the previous calendar day. This does
+// NOT generalize to every date in every file: the exact same "distrust
+// SheetJS, trust the raw serial" swap was tried tool-wide once and broke a
+// different, already ops-verified-correct date elsewhere (the Refund Date
+// tab's "Created date and time"/tier-3 pivot dates), which needs SheetJS's
+// original conversion left alone. So this is applied ONLY to the specific
+// fulfillment-report shipped-date column at the point it's read (see
+// app.js's setupFileUI), never to Open SO workbook dates or anything else.
+function excelSerialToDate(serial) {
+  return new Date(Math.round((serial - 25569) * 86400 * 1000));
+}
+function recomputeDateColumnFromRawSerials(fileBytes, filename, sheetName, headerRow, columnName, rows) {
+  if (!isExcelFilename(filename)) return rows;
+  const XLSXLib = getXlsxLib();
+  const data = fileBytes instanceof ArrayBuffer ? new Uint8Array(fileBytes) : fileBytes;
+  const wbRaw = XLSXLib.read(data, { type: "array", cellDates: false });
+  const wsRaw = wbRaw.Sheets[sheetName];
+  if (!wsRaw) return rows;
+
+  // Re-run the exact same raw-rows -> header/dataRows -> blank-row-filter
+  // pipeline as sheetToRawRows/loadTableFromRawRows, just against the
+  // cellDates:false parse instead. Blank data rows get dropped identically
+  // in both parses (a date cell's raw number vs. its Date object are both
+  // non-null, so the "is this row blank" test never disagrees between the
+  // two), so dataRowsRaw lines up 1:1, in order, with the already-filtered
+  // `rows` passed in — safe to index into positionally rather than via
+  // sheet cell-address math, which blank rows would otherwise misalign.
+  const rawRowsRaw = XLSXLib.utils.sheet_to_json(wsRaw, { header: 1, raw: true, defval: null });
+  const headers = (rawRowsRaw[headerRow] || []).map((h) => (h == null ? "" : String(h).trim()));
+  const colIdx = headers.indexOf(columnName);
+  if (colIdx === -1) return rows;
+  const dataRowsRaw = rawRowsRaw.slice(headerRow + 1).filter((r) => r.some((v) => v != null && String(v).trim() !== ""));
+
+  return rows.map((row, i) => {
+    const rawVal = dataRowsRaw[i] ? dataRowsRaw[i][colIdx] : undefined;
+    if (typeof rawVal !== "number") return row;
+    return { ...row, [columnName]: excelSerialToDate(rawVal) };
+  });
+}
+
 function listSheets(workbook) {
   return workbook ? workbook.SheetNames : null;
 }
@@ -408,6 +458,7 @@ if (typeof window !== "undefined") {
     toNum,
     parseCsv,
     loadWorkbook,
+    recomputeDateColumnFromRawSerials,
     listSheets,
     sheetToRawRows,
     guessHeaderRowAndScore,
@@ -432,6 +483,7 @@ if (typeof module !== "undefined") {
     toNum,
     parseCsv,
     loadWorkbook,
+    recomputeDateColumnFromRawSerials,
     listSheets,
     sheetToRawRows,
     guessHeaderRowAndScore,
