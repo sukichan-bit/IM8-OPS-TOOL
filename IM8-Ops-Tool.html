@@ -5889,15 +5889,23 @@ function ukRoyalMailCard() {
     { min: 15.01, max: 20, prices: { "Area 1": 4.75, "Area 2": 9.75, "Area 3": 8.75 } },
   ];
   card.flatSurcharge = 0.17; // Green Surcharge £0.05 + Peak Season Surcharge £0.12, every package
+  // No per-kg overage formula is documented for this card (only a flat
+  // £20 Oversize Surcharge, which is dims-triggered, not weight-formula-
+  // based) — split into multiple sub-20kg consignments so a heavier
+  // order still quotes, per user request, rather than erroring out.
+  card.splitAllowed = true;
   card.notes =
     "RM Tracked Parcel_48H (RM_TR48). Area 1 = rest of UK. Area 2 (postcodes IV, HS, KA27-28, KW, PA20-49, " +
     "PA60-78, PA80, PH17-26, PH30-44, PH49-50, ZE, FK20, GY, JE, IM) and Area 3 (BT, TR21-25, AB35-38, AB53-56, " +
     "FK18-19, PO30-41) prices already include the Remote Area Surcharge (Area 2 +£2.50 / Area 3 +£2.00). Max " +
-    "weight 20kg; dims must be under 61x46x46cm or Oversize Surcharge (£20) applies — not included here. Other " +
-    "surcharges not included (quote separately if applicable): Return Shipping Fee (= outbound rate), Redelivery " +
-    "Fee (£2.30), Delivery interception not supported, BFPO/FBA not serviceable. Claims: £5/claim for items not " +
-    "delivered within 10 working days of scanning (unscanned packages can't be claimed); compensation capped " +
-    "at £15/package, subject to Royal Mail's final decision.";
+    "weight 20kg; dims must be under 61x46x46cm or Oversize Surcharge (£20) applies — not included here (a " +
+    "shipment over 20kg is priced here as a split into multiple sub-20kg consignments; a single oversized " +
+    "package + the £20 surcharge is a real alternative this sheet doesn't give us a price for — confirm actual " +
+    "packing with Royal Mail before quoting). Other surcharges not included (quote separately if applicable): " +
+    "Return Shipping Fee (= outbound rate), Redelivery Fee (£2.30), Delivery interception not supported, " +
+    "BFPO/FBA not serviceable. Claims: £5/claim for items not delivered within 10 working days of scanning " +
+    "(unscanned packages can't be claimed); compensation capped at £15/package, subject to Royal Mail's final " +
+    "decision.";
   return card;
 }
 
@@ -5945,13 +5953,20 @@ function ukDpdEmnaCard() {
     { min: 5.01, max: 10, prices: { UAE: 112.13, Israel: 174.3, "Saudi Arabia": 173.91 } },
   ];
   card.flatSurcharge = 0;
+  // "Max weight 10kg" is the only stated limit (no oversize surcharge or
+  // rejection policy documented) — split into sub-10kg consignments so a
+  // heavier order still quotes, capped at that stated 10kg physical max.
+  card.splitAllowed = true;
+  card.maxPhysicalWeight = 10;
   card.notes =
     "Max weight 10kg, max length 100cm, L+H+W < 120cm. Transit time: UAE 4-6 working days, Saudi Arabia 4-6 " +
     "working days, Israel 6-8 working days. Rates exclude UK VAT. Norway was dropped from this service in the " +
     "2026-09-21 rate sheet (previously offered on this card) — confirm with DPD if a customer needs Norway. " +
-    "Other surcharges not included (quote separately if applicable): Return to Origin Fee (= outbound rate + " +
-    "£5.50/parcel), DDP Service Admin Fee (£6/parcel or 4% of duty/tax, whichever is higher), Duties & Taxes " +
-    "(charged at actual cost, due within 5 days), interception/redirection (£5/shipment if successful).";
+    "A shipment over 10kg is priced here as a split into multiple sub-10kg consignments — confirm actual " +
+    "packing with DPD before quoting, since no over-max pricing is given on this sheet. Other surcharges not " +
+    "included (quote separately if applicable): Return to Origin Fee (= outbound rate + £5.50/parcel), DDP " +
+    "Service Admin Fee (£6/parcel or 4% of duty/tax, whichever is higher), Duties & Taxes (charged at actual " +
+    "cost, due within 5 days), interception/redirection (£5/shipment if successful).";
   return card;
 }
 
@@ -5960,13 +5975,17 @@ function ukDpdEmnaCard() {
 // brackets (Small 0-1.5kg, Medium 1.51-15kg) across five zones. Weights
 // >15kg, or oversized (>120cm longest side or girth ≥225cm), reclassify
 // to Evri's "Light & Large" service — no price for that is given in this
-// sheet, so it's left unpriced (quoteRequired) rather than guessed at.
+// sheet, so a shipment over 15kg is priced here as a split into
+// sub-15kg consignments instead (per user request), rather than
+// requiring a manual quote.
 function evriZoneNotes() {
   return "Zone 1 = UK Mainland. Zone 2 = Scottish Highlands & Islands (ZE, HS, KW, IV, AB36-38, AB54-56, " +
     "FK17-21, PA20-80, PH15-50, KA27-28, TR21-25). Zone 3 = Channel Islands (GY, JE). Zone 4 = Northern " +
     "Ireland (BT). Zone 5 = Isle of Man & Isle of Wight (IM, PO). Weights over 15kg, or oversized (longest " +
-    "side > 120cm or girth ≥ 225cm), reclassify to Evri's \"Light & Large\" service — not priced on this sheet, " +
-    "so quote separately. Other surcharges not included (quote separately if applicable): Relabeling " +
+    "side > 120cm or girth ≥ 225cm), reclassify to Evri's \"Light & Large\" service — that's a real " +
+    "alternative not priced on this sheet, so a shipment over 15kg is priced here instead as a split into " +
+    "multiple sub-15kg consignments; confirm actual packing (or quote Light & Large separately) before " +
+    "quoting a customer. Other surcharges not included (quote separately if applicable): Relabeling " +
     "(£0.75/package), Undelivered Surcharge (£2/package Small-Medium, £8.50/package Light & Large), Courier " +
     "Return (£3.25/package Small-Medium, £8.50/package Light & Large), 40L+ Oversized Volume Surcharge " +
     "(£0.75/package, L×W×H(cm)÷1000 > 40L), Clean Air Levy (£0.45/package, ULEZ/CAZ postcodes), Weight Audit " +
@@ -5981,6 +6000,7 @@ function ukEvri48hCard() {
   const card = emptyManualCard("UK", "Evri 48H", "kg", "cm", "GBP");
   card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
   card.brackets = [evriBracket(0, 1.5, 2.75, 9, 10.5, 9, 10), evriBracket(1.51, 15, 3.45, 9, 10.5, 9, 10)];
+  card.splitAllowed = true;
   card.notes = "HERM_48. " + evriZoneNotes();
   return card;
 }
@@ -5988,6 +6008,7 @@ function ukEvri48hPodCard() {
   const card = emptyManualCard("UK", "Evri 48H (with POD)", "kg", "cm", "GBP");
   card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
   card.brackets = [evriBracket(0, 1.5, 3.05, 9.5, 11, 9.5, 10.5), evriBracket(1.51, 15, 3.75, 9.5, 11, 9.5, 10.5)];
+  card.splitAllowed = true;
   card.notes = "HERM_48_S — includes Proof of Delivery. " + evriZoneNotes();
   return card;
 }
@@ -5995,6 +6016,7 @@ function ukEvri24hCard() {
   const card = emptyManualCard("UK", "Evri 24H", "kg", "cm", "GBP");
   card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
   card.brackets = [evriBracket(0, 1.5, 4.25, 9.9, 11.4, 9.9, 10.9), evriBracket(1.51, 15, 5.25, 9.9, 11.4, 9.9, 10.9)];
+  card.splitAllowed = true;
   card.notes = "HERM_24. " + evriZoneNotes();
   return card;
 }
@@ -6002,6 +6024,7 @@ function ukEvri24hPodCard() {
   const card = emptyManualCard("UK", "Evri 24H (with POD)", "kg", "cm", "GBP");
   card.zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
   card.brackets = [evriBracket(0, 1.5, 4.55, 10.4, 11.9, 10.4, 11.4), evriBracket(1.51, 15, 5.55, 10.4, 11.9, 10.4, 11.4)];
+  card.splitAllowed = true;
   card.notes = "HERM_24_S — includes Proof of Delivery. " + evriZoneNotes();
   return card;
 }
@@ -6565,6 +6588,10 @@ function gpsDdpCard() {
   const card = emptyManualCard("US_GPS", "GPS DDP — US to Global", "lb", "in");
   Object.assign(card, GPS_DDP_US2GLOBAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.notes += " Loaded despite being expired, per explicit request (2026-09-11) — replace via Import once a current GPS rate card is available.";
+  // No over-max policy documented on this sheet (bracket table just
+  // stops at 66lb) — split into consignments per user request rather
+  // than erroring out.
+  card.splitAllowed = true;
   return card;
 }
 
@@ -6572,6 +6599,7 @@ function gpsDduCard() {
   const card = emptyManualCard("US_GPS", "GPS DDU — US to Global", "lb", "in");
   Object.assign(card, GPS_DDU_US2GLOBAL_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
   card.notes += " Loaded despite being expired, per explicit request (2026-09-11) — replace via Import once a current GPS rate card is available.";
+  card.splitAllowed = true; // see gpsDdpCard() above
   return card;
 }
 
@@ -6631,24 +6659,45 @@ function gpsUspsPmCard() {
 // this origin, so these three cards stay zoneSource: "manual" rather than
 // silently reusing the USPS chart and risking a wrong zone — pick the
 // zone manually, or provide a verified UPS/FedEx zone chart to auto-wire.
+// None of these 3 document an over-max policy either (bracket table
+// just stops at 150lb/150lb/30lb) — split per user request.
 function gpsUpsGroundCard() {
   const card = emptyManualCard("US_GPS", "GPS UPS Ground", "lb", "in");
   Object.assign(card, GPS_UPS_GROUND_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
   return card;
 }
 function gpsFedexGroundCard() {
   const card = emptyManualCard("US_GPS", "GPS FedEx Ground", "lb", "in");
   Object.assign(card, GPS_FEDEX_GROUND_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
   return card;
 }
 function gpsFedexGroundEconomyCard() {
   const card = emptyManualCard("US_GPS", "GPS FedEx Ground Economy", "lb", "in");
   Object.assign(card, GPS_FEDEX_GROUND_ECONOMY_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
   return card;
 }
 function gpsUpsWorldwideExpeditedCard() {
   const card = emptyManualCard("US_GPS", "GPS UPS Worldwide Expedited (International)", "lb", "in");
   Object.assign(card, GPS_UPS_WORLDWIDE_EXPEDITED_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  // The source sheet ("250707 GPS UPS International Rates v1.xlsx") has
+  // one more row past the 150lb flat-price table: labelled "Per Lb",
+  // weight "9999999" — a genuine per-pound RATE (not a flat total) for
+  // any weight over 150lb, same shape as FedEx HK's >20.5kg tiers (see
+  // priceForZone()'s `perKg` bracket flag). This was previously skipped
+  // ("not modeled here... quote those manually") — now added directly,
+  // so weights over 150lb price for real instead of requiring a manual
+  // quote.
+  card.brackets.push({
+    min: 150.01, max: 99999, perKg: true,
+    prices: { "71": 0.9855, "72": 0.999, "74": 0.972, "601": 1.512, "602": 1.3905, "603": 1.7955, "604": 2.241, "605": 1.9305, "606": 2.6595, "607": 2.97, "608": 2.943, "609": 1.809, "611": 2.295, "612": 1.701, "613": 1.6605, "620": 1.296, "621": 2.1465, "631": 1.512, "632": 1.3905, "633": 1.7955, "634": 2.241, "635": 1.9305, "636": 2.6595, "637": 2.97, "638": 2.943, "639": 1.809, "641": 2.295, "642": 1.701, "643": 1.6605 },
+  });
+  card.notes = card.notes.replace(
+    "Weights above 150lb price per additional lb on the source sheet — not modeled here (bracket pricing only); quote those manually.",
+    "Weights above 150lb price at a real per-lb rate from the source sheet (e.g. zone 71: $0.9855/lb) — modeled as a bracket above 150lb."
+  );
   return card;
 }
 
@@ -6675,34 +6724,60 @@ const NL_DHL_DE_KP_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","cu
 const NL_DHL_DE_PI_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["MONACO","SWITZERLAND","NORWAY"],"countryZoneMap":{"MONACO":"MONACO","SWITZERLAND":"SWITZERLAND","NORWAY":"NORWAY"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":0.26,"max":0.5,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":0.51,"max":0.75,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":0.76,"max":1,"prices":{"MONACO":24.91,"SWITZERLAND":26.4,"NORWAY":20}},{"min":1.01,"max":1.5,"prices":{"MONACO":26.18,"SWITZERLAND":27.35,"NORWAY":21.31}},{"min":1.51,"max":2,"prices":{"MONACO":26.18,"SWITZERLAND":27.35,"NORWAY":21.31}},{"min":2.01,"max":3,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":3.01,"max":4,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":4.01,"max":5,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":5.01,"max":10,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":10.01,"max":15,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":15.01,"max":20,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":20.01,"max":25,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}},{"min":25.01,"max":30,"prices":{"MONACO":null,"SWITZERLAND":null,"NORWAY":null}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":0,"percentSurcharge":0.0125,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 1.25% surcharge on top of the base rate."};
 const NL_DPD_SEED = {"mode":"bracket","weightUnit":"kg","dimUnit":"cm","currency":"EUR","zoneSource":"manual","zones":["ISRAEL","SAUDI ARABIA","UNITED ARAB EMIRATES"],"countryZoneMap":{"ISRAEL":"ISRAEL","SAUDI ARABIA":"SAUDI ARABIA","UNITED ARAB EMIRATES":"UNITED ARAB EMIRATES"},"dimDivisor":null,"brackets":[{"min":0,"max":0.25,"prices":{"ISRAEL":28.3,"SAUDI ARABIA":16.37,"UNITED ARAB EMIRATES":15.04}},{"min":0.26,"max":0.5,"prices":{"ISRAEL":28.3,"SAUDI ARABIA":16.37,"UNITED ARAB EMIRATES":15.04}},{"min":0.51,"max":0.75,"prices":{"ISRAEL":37.42,"SAUDI ARABIA":19.7,"UNITED ARAB EMIRATES":18.03}},{"min":0.76,"max":1,"prices":{"ISRAEL":37.42,"SAUDI ARABIA":19.7,"UNITED ARAB EMIRATES":18.03}},{"min":1.01,"max":1.5,"prices":{"ISRAEL":46.13,"SAUDI ARABIA":23.03,"UNITED ARAB EMIRATES":21.02}},{"min":1.51,"max":2,"prices":{"ISRAEL":55.25,"SAUDI ARABIA":26.36,"UNITED ARAB EMIRATES":24.02}}],"perUnit":{"All":{"base":0,"rate":0,"min":0}},"flatSurcharge":7,"percentSurcharge":0.16,"effectiveDate":null,"expiryDate":null,"notes":"Fuel surcharge excluded from these prices per the source file — applied here as a 16.00% surcharge on top of the base rate. Also excludes a €7.00/piece DDP surcharge to Middle East destinations (applied here as a flat fee) and import duties (invoiced separately, +1.5% handling — not included)."};
 
+// None of the NL cards document an over-max policy at all (no oversize
+// surcharge, no overage rate, no hard-limit statement) — the bracket
+// table just stops. Split into consignments (per user request) rather
+// than erroring out; if a real per-zone ceiling is actually lower, the
+// split safely falls back to "quote required" for that destination
+// instead of guessing, since priceWeightForCard() aborts the whole
+// split if any consignment can't be priced.
+//
+// Several of these cards' bracket arrays are structurally padded out to
+// a uniform 30kg shape, but every zone's price actually goes null well
+// before that (e.g. SPRING_POST's brackets are real up to 20kg, then
+// null 20.01-30kg for every zone; DHL_DE:WP/KP real only to ~1kg,
+// DHL_DE:PI to ~2kg) — maxPhysicalWeight is set to each card's real
+// achievable ceiling (the top bracket where at least one zone still has
+// a price) so the split actually lands on priceable consignment sizes
+// instead of the padded structural max.
 function nlSpringPostCard() {
   const card = emptyManualCard("NL", "NL Intra-EU — SPRING_POST NL", "kg", "cm");
   Object.assign(card, NL_SPRING_POST_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
+  card.maxPhysicalWeight = 20; // real data stops here for every zone; 20.01-30kg is a padded/null placeholder
   return card;
 }
 function nlDhlDeWpCard() {
   const card = emptyManualCard("NL", "NL Intra-EU — DHL_DE: WP", "kg", "cm");
   Object.assign(card, NL_DHL_DE_WP_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
+  card.maxPhysicalWeight = 1; // see nlSpringPostCard() above
   return card;
 }
 function nlDhlNl4uCard() {
   const card = emptyManualCard("NL", "NL Intra-EU — DHL_NL: 4U", "kg", "cm");
   Object.assign(card, NL_DHL_NL_4U_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
   return card;
 }
 function nlDhlDeKpCard() {
   const card = emptyManualCard("NL", "NL Intra-EU — DHL_DE: KP", "kg", "cm");
   Object.assign(card, NL_DHL_DE_KP_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
+  card.maxPhysicalWeight = 1; // see nlSpringPostCard() above
   return card;
 }
 function nlDhlDePiCard() {
   const card = emptyManualCard("NL", "NL Intra-EU — DHL_DE: PI", "kg", "cm");
   Object.assign(card, NL_DHL_DE_PI_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
+  card.maxPhysicalWeight = 2; // see nlSpringPostCard() above
   return card;
 }
 function nlDpdCard() {
   const card = emptyManualCard("NL", "NL Intra-EU — DPD (Middle East)", "kg", "cm");
   Object.assign(card, NL_DPD_SEED, { id: card.id, name: card.name, warehouseId: card.warehouseId });
+  card.splitAllowed = true;
   return card;
 }
 

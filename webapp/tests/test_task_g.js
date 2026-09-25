@@ -177,9 +177,14 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(!qEvriMed.error && close(qEvriMed.perParcelCost, 9), `Evri 48H Zone 4 Medium (1.51-15kg), got ${JSON.stringify(qEvriMed)}`);
   const qEvriPod = taskG.quoteFreight({ card: taskG.ukEvri24hPodCard(), totalWeightKg: 1, parcelCount: 1, dest: { zone: "Zone 1" } });
   assert(!qEvriPod.error && close(qEvriPod.perParcelCost, 4.55), `Evri 24H (with POD) Zone 1 Small, got ${JSON.stringify(qEvriPod)}`);
-  // >15kg reclassifies to Evri's unpriced "Light & Large" service — refuse, don't guess.
+  // >15kg reclassifies to Evri's unpriced "Light & Large" service — no
+  // price for that on this sheet, so (per user request) it's priced
+  // here as a split into sub-15kg consignments instead of requiring a
+  // manual quote: 16kg -> 15kg + 1kg.
+  assert(evri48.splitAllowed === true, `Evri 48H should allow splitting over its 15kg ceiling, got splitAllowed=${evri48.splitAllowed}`);
   const qEvriOver = taskG.quoteFreight({ card: evri48, totalWeightKg: 16, parcelCount: 1, dest: { zone: "Zone 1" } });
-  assert(!!qEvriOver.quoteRequired, `Evri >15kg should require a manual quote, got ${JSON.stringify(qEvriOver)}`);
+  assert(!qEvriOver.error && !qEvriOver.quoteRequired && Array.isArray(qEvriOver.split) && qEvriOver.split.length === 2, `16kg Evri 48H should split into 15+1kg, got ${JSON.stringify(qEvriOver)}`);
+  assert(close(qEvriOver.split[0].weight, 15) && close(qEvriOver.split[1].weight, 1) && close(qEvriOver.totalCost, 6.2), `16kg Evri 48H split shape/total, got ${JSON.stringify(qEvriOver.split)}`);
 
   // Yodel (new this version): weight-tiered ladder + a real 3.2% fuel surcharge.
   const yodel48 = taskG.ukYodel48hCard();
@@ -465,6 +470,15 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   const qJapan = taskG.quoteFreight({ card: upsIntl, totalWeightKg: taskG.convertWeight(2, "lb", "kg"), parcelCount: 1, dest: { country: "Japan" } });
   assert(!qJapan.error && close(qJapan.perParcelCost, 19.83), `UPS Worldwide Expedited 2lb to Japan, got ${JSON.stringify(qJapan)}`);
   assert(!qJapan.expired, "GPS local/international cards have no stated expiry date, so shouldn't be auto-flagged expired");
+
+  // Weights over 150lb price at a real per-lb rate from the source
+  // sheet ("250707 GPS UPS International Rates v1.xlsx"), previously
+  // skipped ("not modeled here... quote those manually") — now added as
+  // a genuine perKg-style top bracket, same mechanism as FedEx HK's
+  // >20.5kg tiers. Japan (zone 613) = $1.6605/lb.
+  const qJapanHeavy = taskG.quoteFreight({ card: upsIntl, totalWeightKg: taskG.convertWeight(200, "lb", "kg"), parcelCount: 1, dest: { country: "Japan" } });
+  assert(!qJapanHeavy.error && !qJapanHeavy.quoteRequired && !qJapanHeavy.split, `200lb UPS Worldwide Expedited to Japan should price via the real per-lb rate, got ${JSON.stringify(qJapanHeavy)}`);
+  assert(close(qJapanHeavy.totalCost, 200 * 1.6605), `200lb @ $1.6605/lb to Japan, got ${qJapanHeavy.totalCost}`);
 }
 
 // ---- percentSurcharge (e.g. a carrier's fuel surcharge quoted as a % of
@@ -999,6 +1013,45 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
   assert(close(heavyQuote.split[0].weight, 20) && close(heavyQuote.split[1].weight, 20) && close(heavyQuote.split[2].weight, 15.36, 1e-6), `split consignment weights, got ${JSON.stringify(heavyQuote.split.map((s) => s.weight))}`);
   assert(heavyQuote.packingConfirmationRequired === true, "a split quote should be flagged as needing packing confirmation");
   assert(close(heavyQuote.totalCost, 82.81, 0.01), `55.36lb GPS USPS-GA to zone 8 total, got ${heavyQuote.totalCost}`);
+}
+
+// ---- User request: "for all quote required exceeds the rate card
+// limit, please apply the rule" (a plain split, e.g. 50kg over a 30kg
+// max -> 30+20kg) — applied broadly across every real seeded rate card
+// that has a weight ceiling and previously had no over-max strategy.
+// Regression test: every real card (excluding the blank Stord USPS
+// starter templates, which the user fills in themselves, and the HK
+// FedEx cards, whose 99,999kg ceiling is never realistically hit) must
+// now either split or use a documented overage rate — never bare
+// quoteRequired-on-overweight. ----
+{
+  const defaults = taskG.defaultRateCards();
+  const exempt = new Set(["Stord ATL — USPS zone rate card (manual entry)", "Stord RNO — USPS zone rate card (manual entry)"]);
+  const stillBlocking = [];
+  for (const wh of Object.keys(defaults)) {
+    for (const c of defaults[wh]) {
+      const max = taskG.cardRateTableMaxWeight(c);
+      if (max == null || max >= 99999 || exempt.has(c.name)) continue;
+      if (!c.splitAllowed && !(c.overageRatePerUnit > 0)) stillBlocking.push(`${wh}/${c.name} (max ${max}${c.weightUnit})`);
+    }
+  }
+  assert(stillBlocking.length === 0, `every real card with a weight ceiling should split or use an overage rate, still blocking: ${JSON.stringify(stillBlocking)}`);
+
+  // Spot-check a representative sample of the newly-enabled cards with
+  // the user's own example shape (e.g. 50kg over a 30kg max -> split
+  // into 30 + remainder). NL Spring Post's bracket array is padded to a
+  // structural 30kg, but every zone's real data actually stops at 20kg
+  // (20.01-30kg is an all-null placeholder) — maxPhysicalWeight = 20
+  // makes the split land on that real ceiling instead: 50kg -> 20+20+10.
+  const nlSpring = taskG.nlSpringPostCard();
+  assert(nlSpring.maxPhysicalWeight === 20, `NL Spring Post should cap splits at its real 20kg ceiling (not the padded 30kg bracket shape), got maxPhysicalWeight=${nlSpring.maxPhysicalWeight}`);
+  const qNl = taskG.quoteFreight({ card: nlSpring, totalWeightKg: 50, parcelCount: 1, dest: { country: "GERMANY" } });
+  assert(!qNl.error && !qNl.quoteRequired && Array.isArray(qNl.split) && qNl.split.length === 3, `50kg over NL Spring Post's real 20kg ceiling should split into 3, got ${JSON.stringify(qNl)}`);
+  assert(close(qNl.split[0].weight, 20) && close(qNl.split[1].weight, 20) && close(qNl.split[2].weight, 10), `should split as 20+20+10kg, got ${JSON.stringify(qNl.split.map((s) => s.weight))}`);
+
+  const gpsUpsGround = taskG.gpsUpsGroundCard();
+  const qGpsHeavy = taskG.quoteFreight({ card: gpsUpsGround, totalWeightKg: taskG.convertWeight(200, "lb", "kg"), parcelCount: 1, dest: { zone: "2" } });
+  assert(!qGpsHeavy.error && !qGpsHeavy.quoteRequired && Array.isArray(qGpsHeavy.split), `200lb over GPS UPS Ground's 150lb max should split, got ${JSON.stringify(qGpsHeavy)}`);
 }
 
 if (!ok) {
