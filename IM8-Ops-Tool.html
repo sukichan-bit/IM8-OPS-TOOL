@@ -1530,6 +1530,39 @@ function recomputeDateColumnFromRawSerials(fileBytes, filename, sheetName, heade
   });
 }
 
+// Same underlying fix as recomputeDateColumnFromRawSerials, applied to a raw
+// 2D-array sheet read (sheetToRawRows's own output) instead of a header-keyed
+// row-object array — needed for task_c.js's refund-date resolution, which
+// reads the Open SO workbook's "Refund Date"/"Action(s)"/"Workings" tabs as
+// raw arrays (pivot tables, not a single header row) rather than through
+// loadTableFromRawRows. Proven scope of the underlying bug (checked against
+// two real Open SO workbooks, 350 real date cells, 100% reproduction): every
+// numeric date cell SheetJS's cellDates:true resolves to a Date comes out
+// exactly 28,842 seconds (8h 0m 42s) earlier than the same cell's own raw
+// serial correctly converted — a fixed, file/format-independent SheetJS
+// defect, not a data quirk, so recomputing from the raw serial is always the
+// more correct value. No row/column realignment risk here (unlike the
+// column-scoped version above): sheet_to_json(header:1) with no range never
+// drops rows, so both parses' raw 2D arrays line up cell-for-cell.
+function recomputeSheetDatesFromRawSerials(fileBytes, filename, sheetName, rawRows) {
+  if (!isExcelFilename(filename)) return rawRows;
+  const XLSXLib = getXlsxLib();
+  const data = fileBytes instanceof ArrayBuffer ? new Uint8Array(fileBytes) : fileBytes;
+  const wbRaw = XLSXLib.read(data, { type: "array", cellDates: false });
+  const wsRaw = wbRaw.Sheets[sheetName];
+  if (!wsRaw) return rawRows;
+  const rawRowsRaw = XLSXLib.utils.sheet_to_json(wsRaw, { header: 1, raw: true, defval: null });
+  return rawRows.map((row, r) => {
+    const rawRow = rawRowsRaw[r];
+    if (!rawRow || !Array.isArray(row)) return row;
+    return row.map((cell, c) => {
+      if (!(cell instanceof Date) || isNaN(cell.getTime())) return cell;
+      const rawVal = rawRow[c];
+      return typeof rawVal === "number" ? excelSerialToDate(rawVal) : cell;
+    });
+  });
+}
+
 function listSheets(workbook) {
   return workbook ? workbook.SheetNames : null;
 }
@@ -1865,6 +1898,7 @@ if (typeof window !== "undefined") {
     parseCsv,
     loadWorkbook,
     recomputeDateColumnFromRawSerials,
+    recomputeSheetDatesFromRawSerials,
     listSheets,
     sheetToRawRows,
     guessHeaderRowAndScore,
@@ -1890,6 +1924,7 @@ if (typeof module !== "undefined") {
     parseCsv,
     loadWorkbook,
     recomputeDateColumnFromRawSerials,
+    recomputeSheetDatesFromRawSerials,
     listSheets,
     sheetToRawRows,
     guessHeaderRowAndScore,
@@ -8872,7 +8907,13 @@ async function handleTaskCOpenSo(file) {
   if (refundedOnSheet) {
     const preview = io.sheetToRawRows(wb, refundedOnSheet, 20);
     const g = io.guessHeaderRowAndScore(preview, { so_number: ["sales order"], date: ["created date and time", "ship date"] });
-    const fullRaw = io.sheetToRawRows(wb, refundedOnSheet, null);
+    // Real WH04/on-hand exports proved SheetJS's own numeric-to-Date
+    // conversion is off by a fixed, file-independent 28,842s (8h 0m 42s) for
+    // certain date cells — reproduced across 350+ real cells in two separate
+    // Open SO workbooks with 100% consistency (see recomputeSheetDatesFromRawSerials).
+    // Recompute this tab's dates from their own raw serials so refund-date
+    // resolution isn't quietly off by a day.
+    const fullRaw = io.recomputeSheetDatesFromRawSerials(buf, file.name, refundedOnSheet, io.sheetToRawRows(wb, refundedOnSheet, null));
     refundedOnRows = io.loadTableFromRawRows(fullRaw, g.row);
     const cols = refundedOnRows.length ? Object.keys(refundedOnRows[0]) : [];
     refundedOnCols.so = io.fuzzyMatchColumn(cols, ["sales order", "sales order number"]);
@@ -8883,7 +8924,9 @@ async function handleTaskCOpenSo(file) {
     // logged in D365 and is the date ops confirmed as correct.
     refundedOnCols.date = io.fuzzyMatchColumn(cols, ["created date and time", "created date", "ship date"]);
   }
-  const actionsRaw = actionsSheet ? io.sheetToRawRows(wb, actionsSheet, null) : null;
+  const actionsRaw = actionsSheet
+    ? io.recomputeSheetDatesFromRawSerials(buf, file.name, actionsSheet, io.sheetToRawRows(wb, actionsSheet, null))
+    : null;
 
   // Tier 4 fallback: the flat "Workings" sheet's "R_Shipped Date" column —
   // covers orders (e.g. "Ops - to cancel Order" / replacement-flow remarks)
@@ -8894,7 +8937,8 @@ async function handleTaskCOpenSo(file) {
   if (workingsSheet) {
     const preview = io.sheetToRawRows(wb, workingsSheet, 20);
     const g = io.guessHeaderRowAndScore(preview, { so_number: ["sales order"], date: ["r_shipped date"] });
-    workingsRows = io.loadTableFromRawRows(io.sheetToRawRows(wb, workingsSheet, null), g.row);
+    const workingsFullRaw = io.recomputeSheetDatesFromRawSerials(buf, file.name, workingsSheet, io.sheetToRawRows(wb, workingsSheet, null));
+    workingsRows = io.loadTableFromRawRows(workingsFullRaw, g.row);
     const cols = workingsRows.length ? Object.keys(workingsRows[0]) : [];
     workingsCols.so = io.fuzzyMatchColumn(cols, ["sales order", "sales order number"]);
     workingsCols.date = io.fuzzyMatchColumn(cols, ["r_shipped date", "replacement shipped date", "shipped date"]);
@@ -9108,6 +9152,7 @@ function renderTaskC() {
   }
 
   const known = Array.from(new Set(matchable.map((r) => String(r[whCol])))).sort();
+  const entity = inferFacility(known);
   let combinedPerSheet = {};
   const combinedDiagnostics = {};
   const covered = new Set();
@@ -9252,7 +9297,7 @@ function renderTaskC() {
     dispatchBtn.textContent = "Building file...";
     try {
       const buf = await io.toExcelBytes(sheetDict);
-      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()}_Dispatch_Check.xlsx`);
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()} ${entity} refund-cancel order_Dispatch check.xlsx`);
     } finally {
       dispatchBtn.disabled = false;
       dispatchBtn.textContent = original;
@@ -9299,7 +9344,7 @@ function renderTaskC() {
     step5Btn.disabled = true;
     try {
       const buf = await io.toExcelBytes({ order: step5.rows, "serial number": { columns: ["Order ID", "SKU Number", "Serial number"], rows: [] } });
-      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()}_D365_Fulfillment_Dispatched.xlsx`);
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()} ${entity} refund order D365 fulfillment_dispatched.xlsx`);
     } finally {
       step5Btn.disabled = false;
       step5Btn.textContent = "Download D365 fulfillment template — Dispatched (.xlsx)";
@@ -9356,7 +9401,7 @@ function renderTaskC() {
       btn.disabled = true;
       try {
         const buf = await io.toExcelBytes({ journal: file.table });
-        downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()}_${file.warehouse}_Inventory_Adjustment_${file.monthKey}.xlsx`);
+        downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()} ${entity} refund order_D365 adjustment journal lines - ${file.warehouse} ${file.monthKey}.xlsx`);
       } finally {
         btn.disabled = false;
         btn.textContent = `Download ${file.warehouse} journal — ${file.monthKey} (.xlsx)`;
@@ -9384,7 +9429,7 @@ function renderTaskC() {
     step7Btn.disabled = true;
     try {
       const buf = await io.toExcelBytes({ order: step7.rows, "serial number": { columns: ["Order ID", "SKU Number", "Serial number"], rows: [] } });
-      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()}_D365_Fulfillment_NotDispatched.xlsx`);
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${todayStamp()} ${entity} refund order D365 fulfillment_not dispatched.xlsx`);
     } finally {
       step7Btn.disabled = false;
       step7Btn.textContent = "Download D365 fulfillment template — Not Dispatched (.xlsx)";

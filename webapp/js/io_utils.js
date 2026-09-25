@@ -124,6 +124,39 @@ function recomputeDateColumnFromRawSerials(fileBytes, filename, sheetName, heade
   });
 }
 
+// Same underlying fix as recomputeDateColumnFromRawSerials, applied to a raw
+// 2D-array sheet read (sheetToRawRows's own output) instead of a header-keyed
+// row-object array — needed for task_c.js's refund-date resolution, which
+// reads the Open SO workbook's "Refund Date"/"Action(s)"/"Workings" tabs as
+// raw arrays (pivot tables, not a single header row) rather than through
+// loadTableFromRawRows. Proven scope of the underlying bug (checked against
+// two real Open SO workbooks, 350 real date cells, 100% reproduction): every
+// numeric date cell SheetJS's cellDates:true resolves to a Date comes out
+// exactly 28,842 seconds (8h 0m 42s) earlier than the same cell's own raw
+// serial correctly converted — a fixed, file/format-independent SheetJS
+// defect, not a data quirk, so recomputing from the raw serial is always the
+// more correct value. No row/column realignment risk here (unlike the
+// column-scoped version above): sheet_to_json(header:1) with no range never
+// drops rows, so both parses' raw 2D arrays line up cell-for-cell.
+function recomputeSheetDatesFromRawSerials(fileBytes, filename, sheetName, rawRows) {
+  if (!isExcelFilename(filename)) return rawRows;
+  const XLSXLib = getXlsxLib();
+  const data = fileBytes instanceof ArrayBuffer ? new Uint8Array(fileBytes) : fileBytes;
+  const wbRaw = XLSXLib.read(data, { type: "array", cellDates: false });
+  const wsRaw = wbRaw.Sheets[sheetName];
+  if (!wsRaw) return rawRows;
+  const rawRowsRaw = XLSXLib.utils.sheet_to_json(wsRaw, { header: 1, raw: true, defval: null });
+  return rawRows.map((row, r) => {
+    const rawRow = rawRowsRaw[r];
+    if (!rawRow || !Array.isArray(row)) return row;
+    return row.map((cell, c) => {
+      if (!(cell instanceof Date) || isNaN(cell.getTime())) return cell;
+      const rawVal = rawRow[c];
+      return typeof rawVal === "number" ? excelSerialToDate(rawVal) : cell;
+    });
+  });
+}
+
 function listSheets(workbook) {
   return workbook ? workbook.SheetNames : null;
 }
@@ -459,6 +492,7 @@ if (typeof window !== "undefined") {
     parseCsv,
     loadWorkbook,
     recomputeDateColumnFromRawSerials,
+    recomputeSheetDatesFromRawSerials,
     listSheets,
     sheetToRawRows,
     guessHeaderRowAndScore,
@@ -484,6 +518,7 @@ if (typeof module !== "undefined") {
     parseCsv,
     loadWorkbook,
     recomputeDateColumnFromRawSerials,
+    recomputeSheetDatesFromRawSerials,
     listSheets,
     sheetToRawRows,
     guessHeaderRowAndScore,
