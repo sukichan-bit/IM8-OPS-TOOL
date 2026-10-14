@@ -458,11 +458,19 @@ function emptyManualCard(warehouseId, name, weightUnit, dimUnit, currency) {
     perUnit: { All: { base: 0, rate: 0, min: 0 } },
     // A flat fee added to every parcel on top of the bracket/perUnit price —
     // for carrier surcharges that apply to every package regardless of zone
-    // or weight (e.g. Royal Mail's "Green Surcharge" + "Peak Season
-    // Surcharge" — see UK rate card notes below). Zone- or weight-specific
+    // or weight (e.g. Royal Mail's "Green Surcharge" — see UK rate card
+    // notes below; date-limited ones like Peak Season go in
+    // seasonalSurcharges instead). Zone- or weight-specific
     // surcharges belong baked into the bracket/perUnit price itself instead
     // (see notes); this is only for the always-on, zone-independent ones.
     flatSurcharge: 0,
+    // Per-parcel flat fees that only apply within a date window — e.g. a
+    // carrier's annual Peak Season Surcharge: [{ label, amount, from, to }]
+    // with inclusive ISO dates ("2026-11-16"). Added on top of
+    // flatSurcharge only when the quote's ship date falls inside the
+    // window (see activeSeasonalSurcharges()); every quote lists them all,
+    // flagged as included or not, so an upcoming one is never invisible.
+    seasonalSurcharges: [],
     // A proportional surcharge applied to the bracket/perUnit price before
     // flatSurcharge is added — e.g. a carrier's fuel surcharge quoted as a
     // percentage rather than a flat fee (0.03 = 3%). Very common across
@@ -617,17 +625,26 @@ function fedexHkIeExportCard() {
 //     identical to the prior version's already-bundled prices — it's not
 //     conditional, it IS what defines those zones as remote, so it's
 //     still folded into the Area 2/3 bracket prices here. "Green
-//     Surcharge" (£0.05) and "Peak Season Surcharge" (£0.12) apply to
-//     every package regardless of zone, so they're the flatSurcharge
-//     (£0.17 total) — unchanged from before.
+//     Surcharge" (£0.05) applies to every package regardless of zone, so
+//     it's the flatSurcharge. Peak Season Surcharge: the 2026-09-21
+//     sheet listed £0.12 as "every package", which this file used to
+//     fold in as always-on — the carrier's 2026-10-14 surcharge notice
+//     gives it explicit dates (£0.15/parcel, 2 Nov 2026 – 1 Jan 2027,
+//     matching the sheet's own "based on the peak season periods
+//     officially published each year"), so it's now a date-limited
+//     seasonalSurcharge instead: outside that window it isn't charged
+//     (flat surcharge off-peak drops from £0.17 to £0.05).
 //   - DPD (UK): "Northern Ireland Clearance Surcharge" (£0.60) applies to
 //     every Zone 4 package, baked into that zone's price (unchanged
-//     total). New this version: a "DPD Temporary Fuel Surcharge" of
-//     £0.15/package applies to every shipment ("introduced due to
-//     increased carrier operating costs... charged on every shipment") —
-//     folded into flatSurcharge (was £0, now £0.15).
+//     total). A "DPD Temporary Fuel Surcharge"/Energy Surcharge applies to
+//     every shipment — £0.15/package on the 2026-09-21 sheet, raised to
+//     £0.18 effective 14 Oct 2026 per the 2026-10-14 notice (first
+//     introduced 29 Mar 2026) — folded into flatSurcharge. Peak Season
+//     Surcharge £0.30/parcel, 16 Nov – 31 Dec 2026 (seasonalSurcharge).
 //   - DPD-EMNA (was "DPD Non-UK"): rates already fuel-inclusive; no flat/
-//     zone surcharge to fold in. Norway has been DROPPED from this
+//     zone surcharge to fold in, aside from DPD Global's Peak Season
+//     Surcharge £0.75/parcel, 16 Nov – 31 Dec 2026 (seasonalSurcharge).
+//     Norway has been DROPPED from this
 //     service in this version (was offered before) — confirm with the
 //     carrier if a customer needs Norway. Weight breaks are also coarser
 //     now (four ~2-5kg bands vs. the prior eight finer ones) and the
@@ -646,7 +663,11 @@ function ukRoyalMailCard() {
     { min: 10.01, max: 15, prices: { "Area 1": 4.15, "Area 2": 9.15, "Area 3": 8.15 } },
     { min: 15.01, max: 20, prices: { "Area 1": 4.75, "Area 2": 9.75, "Area 3": 8.75 } },
   ];
-  card.flatSurcharge = 0.17; // Green Surcharge £0.05 + Peak Season Surcharge £0.12, every package
+  card.flatSurcharge = 0.05; // Green Surcharge £0.05, every package
+  card.seasonalSurcharges = [
+    // Royal Mail's own notice (2026-10-14): £0.15/parcel, 2 Nov 2026 – 1 Jan 2027.
+    { label: "Peak Season Surcharge", amount: 0.15, from: "2026-11-02", to: "2027-01-01" },
+  ];
   // No per-kg overage formula is documented for this card (only a flat
   // £20 Oversize Surcharge, which is dims-triggered, not weight-formula-
   // based) — split into multiple sub-20kg consignments so a heavier
@@ -673,7 +694,10 @@ function ukDpdUkCard() {
   card.brackets = [
     { min: 0, max: 30, prices: { "Zone 1": 6.45, "Zone 2": 21, "Zone 3": 18, "Zone 4": 13.6, "Zone 5": 33.5 } },
   ];
-  card.flatSurcharge = 0.15; // DPD Temporary Fuel Surcharge £0.15, every shipment (new this version)
+  card.flatSurcharge = 0.18; // DPD Temporary Fuel/Energy Surcharge, every shipment: £0.15 -> £0.18 effective 14 Oct 2026
+  card.seasonalSurcharges = [
+    { label: "Peak Season Surcharge", amount: 0.3, from: "2026-11-16", to: "2026-12-31" },
+  ];
   // The source sheet only prices a single 0-30kg bracket, but weights (or
   // dims) beyond that trigger an Oversize Surcharge (£24) rather than an
   // outright rejection — DPD doesn't state a hard per-package ceiling.
@@ -711,6 +735,10 @@ function ukDpdEmnaCard() {
     { min: 5.01, max: 10, prices: { UAE: 112.13, Israel: 174.3, "Saudi Arabia": 173.91 } },
   ];
   card.flatSurcharge = 0;
+  card.seasonalSurcharges = [
+    // DPD Global Peak Season Surcharge (carrier notice, 2026-10-14).
+    { label: "Peak Season Surcharge (DPD Global)", amount: 0.75, from: "2026-11-16", to: "2026-12-31" },
+  ];
   // "Max weight 10kg" is the only stated limit (no oversize surcharge or
   // rejection policy documented) — split into sub-10kg consignments so a
   // heavier order still quotes, capped at that stated 10kg physical max.
@@ -2056,6 +2084,33 @@ function resolveZone(card, dest) {
   return { error: "Pick a destination zone (or country) for this rate card." };
 }
 
+// Normalises a ship date (an "YYYY-MM-DD" string, a Date, or nothing at
+// all) to an ISO date string — blank/invalid means "today" (local time),
+// so a plain quote with no date entered still gets today's surcharges.
+function normalizeShipDate(shipDate) {
+  if (shipDate instanceof Date && !isNaN(shipDate.getTime())) {
+    return `${shipDate.getFullYear()}-${String(shipDate.getMonth() + 1).padStart(2, "0")}-${String(shipDate.getDate()).padStart(2, "0")}`;
+  }
+  if (typeof shipDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(shipDate.trim())) return shipDate.trim();
+  return normalizeShipDate(new Date());
+}
+
+// Resolves a card's date-limited per-parcel surcharges (see
+// emptyManualCard()'s seasonalSurcharges) against a ship date. Returns
+// { shipDate, list, total } — `list` carries every surcharge on the card
+// with an `active` flag (window is inclusive on both ends), `total` sums
+// only the active ones. Cards stored before this field existed simply
+// have none.
+function activeSeasonalSurcharges(card, shipDate) {
+  const date = normalizeShipDate(shipDate);
+  const list = (card.seasonalSurcharges || []).map((s) => ({
+    label: s.label, amount: Number(s.amount) || 0, from: s.from, to: s.to,
+    active: (!s.from || date >= s.from) && (!s.to || date <= s.to),
+  }));
+  const total = Math.round(list.filter((s) => s.active).reduce((sum, s) => sum + s.amount, 0) * 100) / 100;
+  return { shipDate: date, list, total };
+}
+
 // Prices a single weight against a card, proposing a multi-consignment
 // split if the weight exceeds the card's rate-table maximum and the card
 // allows splitting (card.splitAllowed). Returns:
@@ -2077,9 +2132,9 @@ function resolveZone(card, dest) {
 //     overage rate nor splitting is available/enabled for this card;
 //   { error } — some other pricing failure (e.g. no price for this zone),
 //     unrelated to being over the weight max.
-function priceWeightForCard(card, zone, weight) {
+function priceWeightForCard(card, zone, weight, shipDate) {
   const percentSurcharge = Number(card.percentSurcharge) || 0;
-  const flatSurcharge = Number(card.flatSurcharge) || 0;
+  const flatSurcharge = Math.round(((Number(card.flatSurcharge) || 0) + activeSeasonalSurcharges(card, shipDate).total) * 100) / 100;
   const withSurcharges = (basePrice) => {
     const percentAmount = Math.round(basePrice * percentSurcharge * 100) / 100;
     return { baseCost: basePrice, percentAmount, flatSurcharge, total: Math.round((basePrice + percentAmount + flatSurcharge) * 100) / 100 };
@@ -2131,10 +2186,11 @@ function priceWeightForCard(card, zone, weight) {
 // (proposing a split if over the card's max and splitAllowed), and totals
 // across parcels. Returns { error } or { quoteRequired, reason } on
 // failure, or the quote breakdown otherwise.
-function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
+function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest, shipDate }) {
   if (!card) return { error: "No rate card selected." };
   if (!(totalWeightKg > 0)) return { error: "Enter a total weight greater than 0 kg." };
   const count = Math.max(1, parcelCount || 1);
+  const seasonal = activeSeasonalSurcharges(card, shipDate);
   const zoneResult = resolveZone(card, dest);
   if (zoneResult.error) return zoneResult;
   const perParcelWeight = computeChargeableWeightPerParcel({ totalWeightKg, parcelCount: count, dims, card });
@@ -2146,7 +2202,7 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
     zoneManualOverride: !!zoneResult.manualOverride,
   };
 
-  const priced = priceWeightForCard(card, zoneResult.zone, perParcelWeight);
+  const priced = priceWeightForCard(card, zoneResult.zone, perParcelWeight, seasonal.shipDate);
   if (priced.quoteRequired) {
     return { quoteRequired: true, reason: priced.reason, perParcelWeight, weightUnit: card.weightUnit, parcelCount: count, ...zoneFlags, expired, expiryDate: card.expiryDate || null };
   }
@@ -2170,6 +2226,12 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
     // A documented per-unit overage rate was applied (see priceWeightForCard()) — a firm single-package price, not an estimate.
     overageApplied: !!priced.overageApplied,
     overageAmount: priced.overageAmount || 0,
+    // Date-limited per-parcel surcharges (already folded into
+    // flatSurcharge above when active) — the full list, each flagged
+    // active or not for this ship date, so the UI can show an upcoming
+    // one instead of silently omitting it.
+    shipDate: seasonal.shipDate,
+    seasonalSurcharges: seasonal.list,
     ...zoneFlags,
     // Not an error — an expired card is still the best estimate available
     // until a fresh one is entered, but the caller should flag it clearly.
@@ -2186,14 +2248,14 @@ function quoteFreight({ card, totalWeightKg, parcelCount, dims, dest }) {
 // unsupported route stays visible instead of disappearing from the
 // comparison. `warehouseIds` narrows to a subset (e.g. one warehouse);
 // omit for every configured warehouse.
-function compareWarehouseQuotes({ rateCards, warehouseIds, totalWeightKg, parcelCount, dims, dest }) {
+function compareWarehouseQuotes({ rateCards, warehouseIds, totalWeightKg, parcelCount, dims, dest, shipDate }) {
   const ids = warehouseIds && warehouseIds.length ? warehouseIds : FREIGHT_WAREHOUSES.map((w) => w.id);
   const results = [];
   for (const whId of ids) {
     const wh = getWarehouse(whId);
     const cards = (rateCards && rateCards[whId]) || [];
     for (const card of cards) {
-      const quote = quoteFreight({ card, totalWeightKg, parcelCount, dims, dest });
+      const quote = quoteFreight({ card, totalWeightKg, parcelCount, dims, dest, shipDate });
       results.push({ warehouseId: whId, warehouseName: wh ? wh.name : whId, cardId: card.id, cardName: card.name, currency: card.currency || "", ...quote });
     }
   }
@@ -2215,7 +2277,7 @@ if (typeof window !== "undefined") {
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdEmnaCard, ukEvri48hCard, ukEvri48hPodCard, ukEvri24hCard, ukEvri24hPodCard, ukYodel48hCard, ukYodel24hCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
-    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveCanadaMajorRural, isUnitedStatesCountryText, isCanadaCountryText, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
+    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveCanadaMajorRural, isUnitedStatesCountryText, isCanadaCountryText, resolveZone, priceWeightForCard, normalizeShipDate, activeSeasonalSurcharges, quoteFreight, compareWarehouseQuotes,
     newProductId, defaultProductCatalog, emptyProduct, computeOrderWeights, resolveShipmentWeight, CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG,
   };
 }
@@ -2229,7 +2291,7 @@ if (typeof module !== "undefined") {
     emptyManualCard, emptyUspsCard, ukRoyalMailCard, ukDpdUkCard, ukDpdEmnaCard, ukEvri48hCard, ukEvri48hPodCard, ukEvri24hCard, ukEvri24hPodCard, ukYodel48hCard, ukYodel24hCard, fedexHkIpeExportCard, fedexHkIpExportCard, fedexHkIeExportCard, gpsDdpCard, gpsDduCard, gpsUspsGaCard, gpsUspsPmCard, gpsUpsGroundCard, gpsFedexGroundCard, gpsFedexGroundEconomyCard, gpsUpsWorldwideExpeditedCard, nlSpringPostCard, nlDhlDeWpCard, nlDhlNl4uCard, nlDhlDeKpCard, nlDhlDePiCard, nlDpdCard, stordEconomyAtlCard, stordEconomyRnoCard, stordGroundResidentialAtlCard, stordGroundResidentialRnoCard, stordGroundCommercialAtlCard, stordGroundCommercialRnoCard, stordSecondDayAtlCard, stordSecondDayRnoCard, stord3DayAtlCard, stord3DayRnoCard, stordOvernightAtlCard, stordOvernightRnoCard, stordBpmAtlCard, stordBpmRnoCard, stordPriorityDdpAtlCard, stordPriorityDdpRnoCard, stordInternationalDduAtlCard, stordInternationalDduRnoCard, stordStandardDdpAtlCard, stordStandardDdpRnoCard, stordExpeditedDdpAtlCard, stordExpeditedDdpRnoCard, stordStandardDduAtlCard, stordStandardDduRnoCard, defaultRateCards,
     excelSerialToIsoDate, parseUsToGlobalRateSheet, parseUsDomesticZoneSheet, parseUpsWorldwideExpeditedSheets, parseEuIntraDestinationRowsSheet,
     addZone, removeZone, addBracketRow, removeBracketRow,
-    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveCanadaMajorRural, isUnitedStatesCountryText, isCanadaCountryText, resolveZone, priceWeightForCard, quoteFreight, compareWarehouseQuotes,
+    computeChargeableWeightPerParcel, priceForZone, cardRateTableMaxWeight, proposeSplitConsignments, resolveStordNamedZone, findCountryZone, resolveCanadaMajorRural, isUnitedStatesCountryText, isCanadaCountryText, resolveZone, priceWeightForCard, normalizeShipDate, activeSeasonalSurcharges, quoteFreight, compareWarehouseQuotes,
     newProductId, defaultProductCatalog, emptyProduct, computeOrderWeights, resolveShipmentWeight, CATALOG_VOLUMETRIC_DIVISOR_CM3_PER_KG,
   };
 }

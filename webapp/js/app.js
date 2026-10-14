@@ -3418,6 +3418,13 @@ function renderQuoteBreakdown(container, quote, card, warehouseName) {
     container.appendChild(h("p", { class: "info", text: `Per-parcel cost: ${fmtMoney(quote.perParcelCost)}${surchargeNote}` }));
   }
 
+  (quote.seasonalSurcharges || []).forEach((s) => {
+    const window = `${s.from} to ${s.to}`;
+    container.appendChild(h("p", { class: s.active ? "info" : "caption", text: s.active
+      ? `Includes ${s.label}: ${fmtMoney(s.amount)} per parcel (applies ${window}).`
+      : `${s.label}: ${fmtMoney(s.amount)} per parcel applies ${window} — not included for ship date ${quote.shipDate}.` }));
+  });
+
   const totalP = h("p", { class: "info", text: `Estimated total freight cost: ${fmtMoney(quote.totalCost)}` });
   totalP.style.fontSize = "1.25rem";
   totalP.style.fontWeight = "800";
@@ -3467,6 +3474,9 @@ function renderTaskGComparisonTable(container, results) {
       if (isUnfilled(r)) notes.push("rate card appears blank/unfilled — $0.00 isn't a real quote");
       if (r.split) notes.push("split into multiple consignments — estimate pending packing confirmation");
       if (r.overageApplied) notes.push(`over max weight — includes a ${fmtMoney(r.overageAmount)} overage surcharge (confirm with the carrier if actual weight, not just billable weight, is well over the max)`);
+      (r.seasonalSurcharges || []).forEach((s) => {
+        notes.push(s.active ? `includes ${s.label} ${fmtMoney(s.amount)}` : `${s.label} ${fmtMoney(s.amount)} applies ${s.from} to ${s.to} (not included)`);
+      });
       if (r.expired) notes.push("rate card expired");
       tr.appendChild(h("td", { text: notes.join("; ") || "" }));
     }
@@ -3488,20 +3498,24 @@ function computeTaskGQuote() {
     return;
   }
 
+  // Blank = today (taskG.normalizeShipDate handles it), so date-limited
+  // surcharges such as peak season only kick in when the date calls for it.
+  const shipDate = document.getElementById("g-ship-date").value || undefined;
+
   if (taskGState.compareAll) {
     const results = taskG.compareWarehouseQuotes({
       rateCards: taskGState.rateCards, totalWeightKg: shipment.totalWeightKg, parcelCount: shipment.parcelCount,
-      dims: shipment.dims, dest: taskGDest(),
+      dims: shipment.dims, dest: taskGDest(), shipDate,
     });
     resultBox.appendChild(h("p", { class: "caption", text:
-      `Weight used: ${shipment.totalWeightKg.toFixed(2)} kg across ${shipment.parcelCount} carton(s) (${TASK_G_WEIGHT_SOURCE_LABEL[shipment.source]}).` }));
+      `Weight used: ${shipment.totalWeightKg.toFixed(2)} kg across ${shipment.parcelCount} carton(s) (${TASK_G_WEIGHT_SOURCE_LABEL[shipment.source]}). Ship date: ${taskG.normalizeShipDate(shipDate)}.` }));
     renderTaskGComparisonTable(resultBox, results);
     return;
   }
 
   const card = taskGCurrentCard();
   if (!card) { resultBox.appendChild(h("p", { class: "error", text: "Pick or add a rate card first." })); return; }
-  const quote = taskG.quoteFreight({ card, totalWeightKg: shipment.totalWeightKg, parcelCount: shipment.parcelCount, dims: shipment.dims, dest: taskGDest() });
+  const quote = taskG.quoteFreight({ card, totalWeightKg: shipment.totalWeightKg, parcelCount: shipment.parcelCount, dims: shipment.dims, dest: taskGDest(), shipDate });
   if (quote.error) {
     resultBox.appendChild(h("p", { class: "error", text: quote.error }));
     return;

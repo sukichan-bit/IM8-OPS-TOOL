@@ -133,20 +133,24 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
 // Evri / Yodel rate card (RS UK eFulfillment Rate_VIP4.1_IM8_2026.9.21.xlsx,
 // 2026-09-22 — supersedes the prior "...2026.4.1.xlsx" version) ----
 {
+  // These UK cards carry date-limited peak-season surcharges, so every
+  // priced assertion pins an off-peak ship date rather than depending on
+  // the day the tests happen to run.
+  const OFF_PEAK = "2026-10-14";
   const rm = taskG.ukRoyalMailCard();
-  // 1.5kg to a mainland (Area 1) address: base 2.30 + flat surcharge 0.17.
-  const qLocal = taskG.quoteFreight({ card: rm, totalWeightKg: 1.5, parcelCount: 1, dest: { zone: "Area 1" } });
-  assert(!qLocal.error && close(qLocal.perParcelCost, 2.47), `Royal Mail Area 1 0-2kg, got ${JSON.stringify(qLocal)}`);
-  // 3kg to Area 3 (remote-area surcharge already folded into the bracket price): 7.10 + 0.17.
-  const qRemote = taskG.quoteFreight({ card: rm, totalWeightKg: 3, parcelCount: 1, dest: { zone: "Area 3" } });
-  assert(!qRemote.error && close(qRemote.perParcelCost, 7.27), `Royal Mail Area 3 2.01-5kg, got ${JSON.stringify(qRemote)}`);
+  // 1.5kg to a mainland (Area 1) address: base 2.30 + flat surcharge 0.05 (Green Surcharge only off-peak).
+  const qLocal = taskG.quoteFreight({ card: rm, totalWeightKg: 1.5, parcelCount: 1, dest: { zone: "Area 1" }, shipDate: OFF_PEAK });
+  assert(!qLocal.error && close(qLocal.perParcelCost, 2.35), `Royal Mail Area 1 0-2kg, got ${JSON.stringify(qLocal)}`);
+  // 3kg to Area 3 (remote-area surcharge already folded into the bracket price): 7.10 + 0.05.
+  const qRemote = taskG.quoteFreight({ card: rm, totalWeightKg: 3, parcelCount: 1, dest: { zone: "Area 3" }, shipDate: OFF_PEAK });
+  assert(!qRemote.error && close(qRemote.perParcelCost, 7.15), `Royal Mail Area 3 2.01-5kg, got ${JSON.stringify(qRemote)}`);
 
   const dpdUk = taskG.ukDpdUkCard();
   // Northern Ireland (Zone 4): base 13.00 + NI Clearance Surcharge 0.60
-  // (baked into the bracket price) + the new DPD Temporary Fuel
-  // Surcharge 0.15 (flatSurcharge) = 13.75.
-  const qNi = taskG.quoteFreight({ card: dpdUk, totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone 4" } });
-  assert(!qNi.error && close(qNi.perParcelCost, 13.75), `DPD UK Zone 4 (Northern Ireland), got ${JSON.stringify(qNi)}`);
+  // (baked into the bracket price) + the DPD Temporary Fuel/Energy
+  // Surcharge, £0.18 since 14 Oct 2026 (flatSurcharge) = 13.78.
+  const qNi = taskG.quoteFreight({ card: dpdUk, totalWeightKg: 5, parcelCount: 1, dest: { zone: "Zone 4" }, shipDate: OFF_PEAK });
+  assert(!qNi.error && close(qNi.perParcelCost, 13.78), `DPD UK Zone 4 (Northern Ireland), got ${JSON.stringify(qNi)}`);
   // 48kg over the 30kg priced ceiling should split (30 + 18kg), not error
   // out — reported: "48.00 kg exceeds this card's maximum of 30 kg...
   // splitting isn't enabled".
@@ -158,10 +162,37 @@ assert(!!taskG.lookupUspsZone("999", "30301").error, "unknown origin ZIP3 -> err
 
   const dpdEmna = taskG.ukDpdEmnaCard();
   // Country -> zone resolution should work directly off the country name (identity map).
-  const qUae = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 2, parcelCount: 1, dest: { country: "UAE" } });
+  const qUae = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 2, parcelCount: 1, dest: { country: "UAE" }, shipDate: OFF_PEAK });
   assert(!qUae.error && close(qUae.perParcelCost, 30.6), `DPD-EMNA UAE 0-2kg, got ${JSON.stringify(qUae)}`);
-  const qIsrael = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 10, parcelCount: 1, dest: { country: "israel" } }); // case-insensitive
+  const qIsrael = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 10, parcelCount: 1, dest: { country: "israel" }, shipDate: OFF_PEAK }); // case-insensitive
   assert(!qIsrael.error && close(qIsrael.perParcelCost, 174.3), `DPD-EMNA Israel 5.01-10kg, got ${JSON.stringify(qIsrael)}`);
+
+  // ---- Date-limited peak-season surcharges (carrier notice 2026-10-14):
+  // Royal Mail £0.15/parcel 2 Nov 2026 - 1 Jan 2027; DPD UK £0.30 and
+  // DPD Global (EMNA) £0.75, both 16 Nov - 31 Dec 2026. Windows are
+  // inclusive on both ends. ----
+  const peak = (card, date, dest, kg) => taskG.quoteFreight({ card, totalWeightKg: kg, parcelCount: 1, dest, shipDate: date });
+  assert(close(peak(rm, "2026-11-01", { zone: "Area 1" }, 1.5).perParcelCost, 2.35), "Royal Mail: day before the peak window shouldn't include the surcharge");
+  assert(close(peak(rm, "2026-11-02", { zone: "Area 1" }, 1.5).perParcelCost, 2.5), "Royal Mail: first day of the peak window should add £0.15");
+  assert(close(peak(rm, "2027-01-01", { zone: "Area 1" }, 1.5).perParcelCost, 2.5), "Royal Mail: last day of the peak window should still add £0.15");
+  assert(close(peak(rm, "2027-01-02", { zone: "Area 1" }, 1.5).perParcelCost, 2.35), "Royal Mail: day after the peak window shouldn't include the surcharge");
+  assert(close(peak(dpdUk, "2026-11-15", { zone: "Zone 1" }, 5).perParcelCost, 6.63), "DPD UK: before 16 Nov, base 6.45 + 0.18 energy surcharge");
+  assert(close(peak(dpdUk, "2026-11-16", { zone: "Zone 1" }, 5).perParcelCost, 6.93), "DPD UK: peak window adds £0.30 (6.45 + 0.18 + 0.30)");
+  assert(close(peak(dpdUk, "2026-12-31", { zone: "Zone 1" }, 5).perParcelCost, 6.93), "DPD UK: 31 Dec is still inside the window");
+  assert(close(peak(dpdUk, "2027-01-01", { zone: "Zone 1" }, 5).perParcelCost, 6.63), "DPD UK: peak surcharge ends after 31 Dec");
+  assert(close(peak(dpdEmna, "2026-12-01", { country: "UAE" }, 2).perParcelCost, 31.35), "DPD Global (EMNA): peak window adds £0.75 to UAE 0-2kg (30.60 + 0.75)");
+  // Every quote lists the card's seasonal surcharges, active or not.
+  const qJustBefore = peak(dpdUk, "2026-11-10", { zone: "Zone 1" }, 5);
+  assert(qJustBefore.seasonalSurcharges.length === 1 && qJustBefore.seasonalSurcharges[0].active === false && qJustBefore.shipDate === "2026-11-10", `an upcoming surcharge should be listed as not active, got ${JSON.stringify(qJustBefore.seasonalSurcharges)}`);
+  assert(peak(dpdUk, "2026-11-20", { zone: "Zone 1" }, 5).seasonalSurcharges[0].active === true, "a surcharge inside its window should be listed as active");
+  // No ship date given at all -> today, and cards stored before this field existed simply have none.
+  assert(/^\d{4}-\d{2}-\d{2}$/.test(taskG.quoteFreight({ card: rm, totalWeightKg: 1, parcelCount: 1, dest: { zone: "Area 1" } }).shipDate), "a blank ship date should default to today's ISO date");
+  const legacyCard = taskG.ukRoyalMailCard();
+  delete legacyCard.seasonalSurcharges;
+  assert(!taskG.quoteFreight({ card: legacyCard, totalWeightKg: 1.5, parcelCount: 1, dest: { zone: "Area 1" }, shipDate: "2026-12-01" }).error, "a card with no seasonalSurcharges field (older saved card) should still quote");
+  // Also applies through the split path (surcharge is per consignment, like every flat fee).
+  const qSplitPeak = peak(dpdUk, "2026-12-01", { zone: "Zone 1" }, 48);
+  assert(close(qSplitPeak.split[0].flatSurcharge, 0.48) && close(qSplitPeak.totalCost, 2 * (6.45 + 0.48)), `a peak-window split quote should add the per-parcel surcharges to every consignment, got ${JSON.stringify(qSplitPeak)}`);
   // Norway was dropped from this service in the 2026-09-21 rate sheet — should refuse, not guess.
   const qNorway = taskG.quoteFreight({ card: dpdEmna, totalWeightKg: 1, parcelCount: 1, dest: { country: "Norway" } });
   assert(!!qNorway.error, `DPD-EMNA no longer serves Norway — should refuse rather than guess, got ${JSON.stringify(qNorway)}`);
